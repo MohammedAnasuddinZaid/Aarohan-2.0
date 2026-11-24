@@ -29,6 +29,8 @@ type StoredEntry = GestureLogEntry & { status?: string };
 
 export interface NetworkSyncConfig {
   sessionId?: string;
+  /** QR pairing secret. Required once the bed has registered one. */
+  pair?: string | null;
   onAlert?: (entry: GestureLogEntry) => void;
   onStatusUpdate?: (entryId: string, status: NonNullable<StoredEntry["status"]>) => void;
   onMetrics?: (metrics: Record<string, PatientMetrics>) => void;
@@ -115,9 +117,12 @@ export class NetworkSync {
 
   private async openSse(): Promise<void> {
     const session = this.cfg.sessionId ?? "default";
+    const pair = this.cfg.pair
+      ? `&pair=${encodeURIComponent(this.cfg.pair)}`
+      : "";
     try {
       const es = new EventSource(
-        `/api/stream?session=${encodeURIComponent(session)}&since=${this.cursor}`
+        `/api/stream?session=${encodeURIComponent(session)}&since=${this.cursor}${pair}`
       );
       this.es = es;
 
@@ -312,7 +317,13 @@ export class NetworkSync {
   private async pollOnce(): Promise<void> {
     if (this.destroyed) return;
     try {
-      const session = encodeURIComponent(this.cfg.sessionId ?? "default");      const res = await fetch(`/api/sync?session=${session}&since=${this.cursor}`, { cache: "no-store" });
+      const session = encodeURIComponent(this.cfg.sessionId ?? "default");
+      const pair = this.cfg.pair
+        ? `&pair=${encodeURIComponent(this.cfg.pair)}`
+        : "";
+      const res = await fetch(`/api/sync?session=${session}&since=${this.cursor}${pair}`, {
+        cache: "no-store",
+      });
       if (!res.ok) throw new Error(String(res.status));
       const data = (await res.json()) as {
         entries: StoredEntry[];
@@ -355,10 +366,16 @@ export class NetworkSync {
 
   async post(body: unknown): Promise<boolean> {
     try {
+      // Attach the pairing secret to every write. A session with a registered
+      // QR token rejects writes that carry only a guessable session id.
+      const payload =
+        this.cfg.pair && body && typeof body === "object"
+          ? { ...(body as Record<string, unknown>), pair: this.cfg.pair }
+          : body;
       const res = await fetch("/api/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(payload),
         cache: "no-store",
       });
       return res.ok;

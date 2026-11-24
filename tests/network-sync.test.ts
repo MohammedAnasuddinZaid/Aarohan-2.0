@@ -446,6 +446,25 @@ describe("outbound", () => {
     sync.destroy();
   });
 
+  it("carries the pair token on the stream and on writes", async () => {
+    install();
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return new Response("{}", { status: 200 });
+      })
+    );
+    const sync = syncWith({ pair: "pair-token" });
+    sync.connect();
+    expect(lastEs().url).toContain("pair=pair-token");
+
+    await sync.post({ type: "x" });
+    expect(bodies[0]).toEqual({ type: "x", pair: "pair-token" });
+    sync.destroy();
+  });
+
   it("returns false instead of throwing when the network fails", async () => {
     install();
     vi.stubGlobal(

@@ -385,6 +385,8 @@ const K = {
   aiCacheIndex: "care:ai:cache:index",
   seed: "care:seed:v1",
   login: (hash: string) => `care:login:${hash}`,
+  /** Hashed IP+username bucket for sign-in throttling (no raw PII at rest). */
+  loginRate: (hash: string) => `care:loginrate:${hash}`,
   joinToken: (hash: string) => `care:jointoken:${hash}`,
   participant: (hash: string) => `care:participant:${hash}`,
   /** Persisted QR pairing token (uppercase session key), survives restarts. */

@@ -12,6 +12,7 @@ import { PairScanInfo } from "@/types";
  */
 
 const TOKEN_PREFIX = "carespeak_pair_";
+const ACTIVE_CARE_KEY = "carespeak_active_care_session";
 
 function randomToken(): string {
   const bytes = new Uint8Array(16);
@@ -32,6 +33,30 @@ export function getOrCreatePairToken(sessionId: string): string {
     return token;
   } catch {
     return randomToken();
+  }
+}
+
+/**
+ * Read the token this browser already holds for a session, without creating a
+ * new one. Used by live sync so a paired session can prove possession. Reads
+ * the nurse console's remembered pairing as a fallback because that flow stores
+ * the token from the QR URL rather than in the per-bed key.
+ */
+export function peekPairToken(sessionId: string): string {
+  if (typeof window === "undefined" || !sessionId.trim()) return "";
+  const clean = sessionId.trim().toUpperCase();
+  try {
+    const direct =
+      localStorage.getItem(TOKEN_PREFIX + sessionId) ??
+      localStorage.getItem(TOKEN_PREFIX + clean);
+    if (direct) return direct;
+    const raw = localStorage.getItem(ACTIVE_CARE_KEY);
+    if (!raw) return "";
+    const parsed = JSON.parse(raw) as { sessionId?: string; pair?: string | null };
+    if (parsed?.sessionId?.trim().toUpperCase() !== clean) return "";
+    return parsed.pair?.trim() ?? "";
+  } catch {
+    return "";
   }
 }
 

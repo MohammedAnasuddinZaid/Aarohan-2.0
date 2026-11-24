@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionStore } from "@/lib/server/store";
 import { sanitizeVitals, clampFinite } from "@/lib/server/vitals";
+import { authorizeSyncSession } from "@/lib/care/sessionAccess";
 import { AlertAction, DeviceVitals, GestureLogEntry, NurseReply, PatientMetrics } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -46,6 +47,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (!rawSession || !normalizeSession(rawSession)) return bad("Invalid session");
   const session = rawSession.toUpperCase();
 
+  // A registered bed's QR token is required to read its live data. Unpaired
+  // demo consoles keep working so emergency/CCTV routes are not broken.
+  const access = await authorizeSyncSession(request, session, searchParams.get("pair"));
+  if (!access.allowed) return bad("Scan the patient's QR code to read this session.", 401);
+
   const since = Number(searchParams.get("since") ?? "0");
   const store = await getSessionStore();
   const [entries, patientMetrics, vitals, replies] = await Promise.all([
@@ -71,6 +77,7 @@ interface SyncBody {
   reply?: NurseReply;
   deviceId?: string;
   vitals?: Omit<DeviceVitals, "receivedAt">;
+  pair?: string;
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -78,6 +85,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!body || typeof body.type !== "string") return bad("Invalid request");
   if (body.sessionId !== undefined && !normalizeSession(body.sessionId)) return bad("Invalid session");
   const session = body.sessionId?.toUpperCase() ?? "default";
+
+  const access = await authorizeSyncSession(request, session, body.pair);
+  if (!access.allowed) return bad("Scan the patient's QR code to write this session.", 401);
+
   const store = await getSessionStore();
 
   switch (body.type) {

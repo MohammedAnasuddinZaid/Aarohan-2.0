@@ -100,7 +100,7 @@ export default function Navbar() {
     }`}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
-          <a href="/" className="flex items-center gap-2.5 shrink-0 group">
+          <a href="/" aria-label="CareSpeak home" className="flex items-center gap-2.5 shrink-0 group">
             <div className="w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-200 group-hover:shadow-md group-hover:shadow-[#c63a22]/20 overflow-hidden">
               <img src="/logo.png" alt="CareSpeak" className="w-full h-full object-cover" />
             </div>
@@ -149,6 +149,7 @@ export default function Navbar() {
                             <a
                               key={item.href}
                               href={item.href}
+                              aria-current={isActive ? "page" : undefined}
                               onClick={() => setOpenGroup(null)}
                               className={`flex items-start gap-3 px-4 py-2.5 transition-colors ${
                                 isActive ? "bg-[#c63a22]/5 text-[#c63a22]" : "text-[#6e6e6e] hover:text-[#1f1f1f] hover:bg-[#f5f3f0]"
@@ -169,11 +170,11 @@ export default function Navbar() {
               );
             })}
 
-            <a href={ABOUT.href} className={topButtonClass(pathname === ABOUT.href)}>
+            <a href={ABOUT.href} aria-current={pathname === ABOUT.href ? "page" : undefined} className={topButtonClass(pathname === ABOUT.href)}>
               <Info className="w-4 h-4" />
               {label(ABOUT)}
             </a>
-            <a href={EMERGENCY.href} className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-semibold transition-all duration-200 ${emergencyClass}`}>
+            <a href={EMERGENCY.href} aria-current={pathname === EMERGENCY.href ? "page" : undefined} className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-semibold transition-all duration-200 ${emergencyClass}`}>
               <AlertTriangle className="w-4 h-4" />
               {label(EMERGENCY)}
             </a>
@@ -182,6 +183,10 @@ export default function Navbar() {
           <div className="flex items-center gap-2">
             <div className="relative">
               <button
+                type="button"
+                aria-label={`Change language. Current language: ${currentLangInfo.label}`}
+                aria-haspopup="menu"
+                aria-expanded={langOpen}
                 onClick={() => setLangOpen(!langOpen)}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm transition-all duration-200 ${
                   showSolid ? "text-[#6e6e6e] hover:text-[#1f1f1f] hover:bg-[#f5f3f0]" : "text-white/70 hover:text-white hover:bg-white/10"
@@ -199,7 +204,7 @@ export default function Navbar() {
                     className="absolute right-0 top-full mt-2 w-48 rounded-2xl bg-white border border-[#ececec] shadow-lg shadow-black/5 py-2 z-50"
                   >
                     {(Object.entries(SUPPORTED_LANGUAGES) as [SupportedLanguage, { label: string; native: string }][]).map(([code, info]) => (
-                      <button key={code} onClick={() => handleLanguageChange(code)}
+                      <button key={code} type="button" onClick={() => handleLanguageChange(code)}
                         className={`w-full text-left px-4 py-2.5 text-sm transition-colors flex items-center gap-2 ${
                           currentLang === code ? "text-[#c63a22] bg-[#c63a22]/5 font-medium" : "text-[#6e6e6e] hover:text-[#1f1f1f] hover:bg-[#f5f3f0]"
                         }`}
@@ -214,6 +219,10 @@ export default function Navbar() {
             </div>
 
             <button
+              type="button"
+              aria-label={open ? "Close navigation menu" : "Open navigation menu"}
+              aria-expanded={open}
+              aria-controls="mobile-navigation"
               onClick={() => setOpen(!open)}
               className={`lg:hidden p-2 rounded-xl transition-all duration-200 ${
                 showSolid ? "text-[#6e6e6e] hover:text-[#1f1f1f] hover:bg-[#f5f3f0]" : "text-white/70 hover:text-white hover:bg-white/10"
@@ -228,6 +237,7 @@ export default function Navbar() {
       <AnimatePresence>
         {open && (
           <motion.div
+            id="mobile-navigation"
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
@@ -244,6 +254,7 @@ export default function Navbar() {
                       <a
                         key={item.href}
                         href={item.href}
+                        aria-current={isActive ? "page" : undefined}
                         onClick={() => setOpen(false)}
                         className={`flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
                           isActive ? "bg-[#c63a22]/10 text-[#c63a22]" : "text-[#6e6e6e] hover:text-[#1f1f1f] hover:bg-[#f5f3f0]"
@@ -259,6 +270,7 @@ export default function Navbar() {
               <div className="pt-2 border-t border-[#f1f1f1] mt-2">
                 <a
                   href={ABOUT.href}
+                  aria-current={pathname === ABOUT.href ? "page" : undefined}
                   onClick={() => setOpen(false)}
                   className={`flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
                     pathname === ABOUT.href ? "bg-[#c63a22]/10 text-[#c63a22]" : "text-[#6e6e6e] hover:text-[#1f1f1f] hover:bg-[#f5f3f0]"
@@ -269,6 +281,7 @@ export default function Navbar() {
                 </a>
                 <a
                   href={EMERGENCY.href}
+                  aria-current={pathname === EMERGENCY.href ? "page" : undefined}
                   onClick={() => setOpen(false)}
                   className="flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-semibold text-[#c63a22] hover:bg-[#c63a22]/5"
                 >

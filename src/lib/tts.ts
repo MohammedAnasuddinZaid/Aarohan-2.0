@@ -138,10 +138,16 @@ let epoch = 0;
 const MAX_QUEUE = 4;
 
 /**
- * Remote TTS for languages whose voice is not installed locally (Windows ships
- * only en/hi by default). Covers every supported Indian language; used only
- * while online so offline behaviour degrades to the English local-voice path.
+ * Remote TTS is OFF by default. The endpoint receives the exact text in a URL,
+ * which may include a nurse's reply or an assistant answer — PHI leaving the
+ * device contradicts the product's on-device claim and the URL can be retained
+ * by intermediaries. Set NEXT_PUBLIC_CARE_REMOTE_TTS=1 only after a DPIA and a
+ * processor agreement; otherwise a missing local voice falls back to English.
  */
+function remoteTtsAllowed(): boolean {
+  return process.env.NEXT_PUBLIC_CARE_REMOTE_TTS === "1";
+}
+
 function gttsUrl(text: string, lang: string): string {
   const base = lang.split("-")[0];
   return (
@@ -193,7 +199,7 @@ async function pump(): Promise<void> {
     // Preferred when the device lacks the language's voice: stream the NATIVE
     // text from remote neural-quality TTS instead of dropping to English.
     const online = typeof navigator === "undefined" ? true : navigator.onLine !== false;
-    if (!voice && !lang.toLowerCase().startsWith("en") && online) {
+    if (!voice && !lang.toLowerCase().startsWith("en") && online && remoteTtsAllowed()) {
       const ok = await playRemoteTts(gttsUrl(item.text, item.lang));
       if (myEpoch !== epoch) return;
       if (ok) return;

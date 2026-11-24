@@ -36,10 +36,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="manifest" href="/manifest.json" />
       </head>
       <body className="min-h-screen antialiased">
+        <a href="#main-content" className="skip-link">
+          Skip to main content
+        </a>
         <ServiceWorkerRegister />
         <ErrorBoundary>
           <Navbar />
-          <main className="min-h-screen">{children}</main>
+          <main id="main-content" tabIndex={-1} className="min-h-screen">
+            {children}
+          </main>
         </ErrorBoundary>
         <footer className="border-t border-[#ececec] bg-white py-16">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">

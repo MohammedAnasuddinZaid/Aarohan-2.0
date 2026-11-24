@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { getSessionStore } from "@/lib/server/store";
+import { authorizeSyncSession } from "@/lib/care/sessionAccess";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -29,6 +30,11 @@ export async function GET(request: NextRequest): Promise<Response> {
     return new Response("Invalid session", { status: 400 });
   }
   const session = rawSession.toUpperCase();
+
+  const access = await authorizeSyncSession(request, session, searchParams.get("pair"));
+  if (!access.allowed) {
+    return new Response("Scan the patient's QR code to read this session.", { status: 401 });
+  }
 
   // `?since=` (empty value) used to parse as 0 and replay the ENTIRE store on
   // the first tick — treat blank/malformed cursors as "last minute".

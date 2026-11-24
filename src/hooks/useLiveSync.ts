@@ -13,6 +13,7 @@ import {
   NurseReply,
   PatientMetrics,
 } from "@/types";
+import { peekPairToken } from "@/lib/pairing";
 
 export interface UseLiveSyncOptions {
   sessionId?: string;
@@ -65,6 +66,7 @@ export function useLiveSync({ sessionId, enabled = true, onAlert, onReply }: Use
     setLatestReply(null);
     const sync = createNetworkSync({
       sessionId,
+      pair: sessionId ? peekPairToken(sessionId) : null,
       onAlert: (e) => alertCb.current?.(e),
       onStatusUpdate: () => {},
       onMetrics: (m) => setRemoteMetrics((prev) => ({ ...prev, ...m })),

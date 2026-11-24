@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import {
   authorizeSession,
+  authorizeSyncSession,
+  resetSessionAccessForTests,
 } from "@/lib/care/sessionAccess";
 import {
   fail,
@@ -32,6 +34,7 @@ async function nurseRequest(url?: string, extra: Record<string, string> = {}) {
 beforeEach(() => {
   resetDriverForTests();
   resetPairingForTests();
+  resetSessionAccessForTests();
   delete (globalThis as unknown as { __carespeakStoreP?: unknown }).__carespeakStoreP;
   for (const key of URL_OVERRIDES) delete process.env[key];
 });
@@ -60,6 +63,25 @@ describe("authorizeSession", () => {
     expect((await authorizeSession(request(), "AB12", null)).allowed).toBe(false);
     expect((await authorizeSession(request(), "AB12", undefined)).allowed).toBe(false);
     expect((await authorizeSession(request(), "OTHER", "pair-token")).allowed).toBe(false);
+  });
+});
+
+describe("authorizeSyncSession", () => {
+  it("keeps unpaired demo consoles working", async () => {
+    const access = await authorizeSyncSession(request(), "DEMO01", null);
+    expect(access.allowed).toBe(true);
+  });
+
+  it("requires the QR token once a bed has registered one", async () => {
+    await registerPairTokenPersistent("AB12", "pair-token");
+    expect((await authorizeSyncSession(request(), "AB12", null)).allowed).toBe(false);
+    expect((await authorizeSyncSession(request(), "AB12", "wrong")).allowed).toBe(false);
+    expect((await authorizeSyncSession(request(), "AB12", "pair-token")).allowed).toBe(true);
+  });
+
+  it("still accepts a signed-in nurse cookie for a paired bed", async () => {
+    await registerPairTokenPersistent("AB12", "pair-token");
+    expect((await authorizeSyncSession(await nurseRequest(), "AB12", null)).allowed).toBe(true);
   });
 });
 

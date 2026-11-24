@@ -102,6 +102,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -412,7 +413,37 @@ describe("VoiceAlert fallbacks and stop", () => {
     expect(spoken[0].voice).toMatchObject({ name: "Samantha" });
   });
 
-  it("uses remote TTS for a missing native voice when online", async () => {
+  it("keeps patient text local when remote TTS is not opted in", async () => {
+    const played: string[] = [];
+    class FakeAudio {
+      onended: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(public src: string) {
+        played.push(src);
+      }
+      play() {
+        void Promise.resolve().then(() => this.onended?.());
+        return Promise.resolve();
+      }
+    }
+    vi.stubGlobal("Audio", FakeAudio);
+    install();
+    const alert = new VoiceAlert();
+    alert.setLanguage("hi-IN");
+    await settle();
+    played.length = 0;
+    spoken.length = 0;
+
+    alert.speak("HELP");
+    await settle();
+
+    expect(played).toHaveLength(0);
+    // Local English fallback still guarantees the patient hears the need.
+    expect(spoken[0].lang).toBe("en-US");
+  });
+
+  it("uses remote TTS for a missing native voice when explicitly opted in", async () => {
+    vi.stubEnv("NEXT_PUBLIC_CARE_REMOTE_TTS", "1");
     const played: string[] = [];
     class FakeAudio {
       onended: (() => void) | null = null;
@@ -446,7 +477,8 @@ describe("VoiceAlert fallbacks and stop", () => {
     expect(spoken).toHaveLength(0);
   });
 
-  it("caps remote text at 190 characters", async () => {
+  it("caps remote text at 190 characters when opted in", async () => {
+    vi.stubEnv("NEXT_PUBLIC_CARE_REMOTE_TTS", "1");
     const played: string[] = [];
     class FakeAudio {
       onended: (() => void) | null = null;
