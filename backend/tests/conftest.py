@@ -51,4 +51,22 @@ def clean_db():
     from app import database
 
     database.init_db()
+    # init_db() only creates tables and upserts patients; it does not clear
+    # transactional rows, so stale challenges/contacts from a previous run
+    # (or a previous test in the same session) could leak. Wipe them here.
+    with database.connection() as conn:
+        for table in (
+            "verification_challenges",
+            "contacts",
+            "family_permissions",
+            "calls",
+            "messages",
+            "tasks",
+            "care_sessions",
+            "audit_log",
+        ):
+            try:
+                conn.execute(f"DELETE FROM {table}")
+            except Exception:
+                pass
     return database

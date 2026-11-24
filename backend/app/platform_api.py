@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
@@ -452,7 +453,15 @@ async def confirm_verification(
         raise HTTPException(status_code=400, detail={"code": "no_challenge", "message": "Start a verification first."})
     if challenge["state"] != "pending":
         raise HTTPException(status_code=400, detail={"code": "challenge_closed", "message": "That challenge is no longer open."})
-    if challenge["expires_at"] < database.utc_now():
+    # Compare as datetimes, not raw strings: string comparison of ISO stamps
+    # can disagree across formats/timezones and falsely expire a fresh challenge.
+    try:
+        expires_at = datetime.fromisoformat(str(challenge["expires_at"]).replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        expired = expires_at < now
+    except (TypeError, ValueError):
+        expired = str(challenge["expires_at"]) < database.utc_now()
+    if expired:
         await asyncio.to_thread(database.update_challenge, challenge["id"], state="expired")
         raise HTTPException(status_code=400, detail={"code": "challenge_expired", "message": "The code expired. Send a new one."})
     secret = secrets_store.session_secret()
@@ -483,11 +492,19 @@ def _challenge_hash(secret: str, code: str) -> str:
 def _latest_open_challenge(contact_id: int) -> Optional[dict[str, Any]]:
     # A tiny scan over the challenge table (bounded rows) keeps this dependency-free.
     with database.connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM verification_challenges WHERE contact_id = ? ORDER BY created_at DESC LIMIT 1",
+        rows = conn.execute(
+            "SELECT * FROM verification_challenges WHERE contact_id = ? ORDER BY created_at DESC",
             (contact_id,),
-        ).fetchone()
-    return dict(row) if row else None
+        ).fetchall()
+    if not rows:
+        return None
+    # Prefer a challenge that is still pending and not expired.
+    now = database.utc_now()
+    for row in rows:
+        d = dict(row)
+        if d.get("state") == "pending" and str(d.get("expires_at", "")) >= now:
+            return d
+    return dict(rows[0])
 
 
 # ---------------------------------------------------------------------------
