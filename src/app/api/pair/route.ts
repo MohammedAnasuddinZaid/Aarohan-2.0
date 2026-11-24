@@ -10,8 +10,18 @@ import {
   hasRegistrationPersistent,
 } from "@/lib/server/pairing";
 import { nurseFromRequest } from "@/lib/care/auth";
+import { clientIp } from "@/lib/care/loginRateLimit";
+import { checkThrottle, recordThrottleHit } from "@/lib/care/throttle";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Pairing writes are capability-changing. A limit per client IP blunts the
+ * enumeration/flooding vector behind P0-7 (an attacker pre-registering bogus
+ * tokens for every bed id listed by the open ward board). Generous enough that
+ * a console mounting once per bed is never affected.
+ */
+const PAIR_WRITE_POLICY = { limit: 30, windowMs: 60_000 };
 
 function valid(s: unknown): s is string {
   return typeof s === "string" && /^[A-Z0-9_-]{3,32}$/.test(s.toUpperCase());
@@ -52,6 +62,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   if (!validPair(pair)) {
     return NextResponse.json({ ok: false, error: "Invalid pairing token" }, { status: 400 });
+  }
+
+  if (body.action === "register" || body.action === "rotate") {
+    const ip = clientIp(req.headers);
+    const status = await checkThrottle("pair", ip, PAIR_WRITE_POLICY);
+    if (!status.allowed) {
+      return NextResponse.json(
+        { ok: false, error: "Too many pairing attempts. Try again shortly." },
+        { status: 429, headers: { "Retry-After": String(Math.ceil(status.retryAfterMs / 1000)) } }
+      );
+    }
+    await recordThrottleHit("pair", ip, PAIR_WRITE_POLICY);
   }
 
   switch (body.action) {

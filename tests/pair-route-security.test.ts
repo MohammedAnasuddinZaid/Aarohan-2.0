@@ -168,3 +168,26 @@ describe("POST /api/notify — proof required when a provider is configured", ()
     expect(body.provider).toBe("logging-only");
   });
 });
+
+describe("POST /api/pair — pairing writes are throttled per client", () => {
+  it("429s once the per-IP window is exhausted", async () => {
+    for (let i = 0; i < 30; i += 1) {
+      await pairPost(
+        post("https://care.example.com/api/pair", {
+          action: "register",
+          session: SESSION,
+          pair: `tok-${i}-abcdefgh`,
+        })
+      );
+    }
+    const res = await pairPost(
+      post("https://care.example.com/api/pair", {
+        action: "register",
+        session: SESSION,
+        pair: "tok-over-abcdefgh",
+      })
+    );
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBeTruthy();
+  });
+});
