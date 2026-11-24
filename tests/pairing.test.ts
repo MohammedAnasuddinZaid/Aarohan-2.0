@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  forceRotatePairTokenPersistent,
   getPairSummary,
   getScans,
   hasRegistration,
@@ -127,12 +128,32 @@ describe("durable pairing layer", () => {
   });
 
   it("rotates a persisted token, including after a cache wipe", async () => {
-    expect(await rotatePairTokenPersistent("missing")).toBeNull();
+    expect(await rotatePairTokenPersistent("missing")).toEqual({ ok: false, reason: "not_registered" });
     await registerPairTokenPersistent("bed1", "old");
     resetPairingForTests();
-    const next = await rotatePairTokenPersistent("bed1", "new");
-    expect(next).toBe("new");
+    const outcome = await rotatePairTokenPersistent("bed1", "new", "old");
+    expect(outcome).toEqual({ ok: true, token: "new" });
     expect(await verifyPairTokenPersistent("bed1", "old")).toBe(false);
     expect(await verifyPairTokenPersistent("bed1", "new")).toBe(true);
+  });
+
+  it("refuses to rotate without proof of the current token", async () => {
+    await registerPairTokenPersistent("bed1", "old");
+    expect(await rotatePairTokenPersistent("bed1", "stolen")).toEqual({ ok: false, reason: "forbidden" });
+    expect(await rotatePairTokenPersistent("bed1", "stolen", "wrong")).toEqual({ ok: false, reason: "forbidden" });
+    // The original token still owns the bed — the seizure did not take hold.
+    expect(await verifyPairTokenPersistent("bed1", "old")).toBe(true);
+    expect(await verifyPairTokenPersistent("bed1", "stolen")).toBe(false);
+  });
+
+  it("force-rotate is the nurse recovery path and needs no proof", async () => {
+    await registerPairTokenPersistent("bed1", "old");
+    const token = await forceRotatePairTokenPersistent("bed1", "recovered");
+    expect(token).toBe("recovered");
+    expect(await verifyPairTokenPersistent("bed1", "old")).toBe(false);
+    expect(await verifyPairTokenPersistent("bed1", "recovered")).toBe(true);
+    // And it can create a registration where none existed.
+    expect(await forceRotatePairTokenPersistent("bed2", "fresh")).toBe("fresh");
+    expect(await verifyPairTokenPersistent("bed2", "fresh")).toBe(true);
   });
 });

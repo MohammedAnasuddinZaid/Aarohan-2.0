@@ -2,12 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   registerPairTokenPersistent,
   rotatePairTokenPersistent,
+  forceRotatePairTokenPersistent,
   recordScan,
   getPairSummary,
   getScans,
   verifyPairTokenPersistent,
   hasRegistrationPersistent,
 } from "@/lib/server/pairing";
+import { nurseFromRequest } from "@/lib/care/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +35,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     action?: string;
     session?: string;
     pair?: string;
+    /** Proof of the CURRENT token, required to rotate an already-paired bed. */
+    proof?: string;
     role?: string;
   } | null;
 
@@ -53,16 +57,50 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   switch (body.action) {
     case "register": {
       const ok = await registerPairTokenPersistent(session, pair);
-      return NextResponse.json({ ok, serverTime: Date.now() });
+      if (ok) return NextResponse.json({ ok: true, serverTime: Date.now() });
+      // A second register with the SAME token is an idempotent re-affirm.
+      if (await verifyPairTokenPersistent(session, pair)) {
+        return NextResponse.json({ ok: true, serverTime: Date.now() });
+      }
+      // A different token already owns this bed. A signed-in nurse may reclaim
+      // it; otherwise the console must be told (its alert link is paired to
+      // another device), never silently "succeed".
+      if (await nurseFromRequest(req)) {
+        const token = await forceRotatePairTokenPersistent(session, pair);
+        if (token) return NextResponse.json({ ok: true, reclaimed: true, serverTime: Date.now() });
+      }
+      return NextResponse.json(
+        { ok: false, error: "This bed is already paired to another device.", reason: "already_paired" },
+        { status: 409 }
+      );
     }
     case "rotate": {
+      // Recovery path: a signed-in nurse can always rotate a bed.
+      if (await nurseFromRequest(req)) {
+        const token = await forceRotatePairTokenPersistent(session, pair || undefined);
+        if (!token) return NextResponse.json({ ok: false, error: "Not registered" }, { status: 404 });
+        return NextResponse.json({ ok: true, pair: token, serverTime: Date.now() });
+      }
       // The patient console generates the replacement token locally (so its QR
-      // can re-render immediately); persist *that* token. Previously the server
-      // rotated to a different random token and the client's follow-up register
-      // was rejected, leaving every printed QR unusable.
-      const token = await rotatePairTokenPersistent(session, pair || undefined);
-      if (!token) return NextResponse.json({ ok: false, error: "Not registered" }, { status: 404 });
-      return NextResponse.json({ ok: true, pair: token, serverTime: Date.now() });
+      // can re-render immediately) and MUST prove it holds the current token.
+      const outcome = await rotatePairTokenPersistent(
+        session,
+        pair || undefined,
+        typeof body.proof === "string" ? body.proof : null
+      );
+      if (!outcome.ok) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              outcome.reason === "forbidden"
+                ? "Proof of the current pairing token is required to rotate it."
+                : "Not registered",
+          },
+          { status: outcome.reason === "forbidden" ? 403 : 404 }
+        );
+      }
+      return NextResponse.json({ ok: true, pair: outcome.token, serverTime: Date.now() });
     }
     case "scan": {
       if (!(await verifyPairTokenPersistent(session, pair))) {

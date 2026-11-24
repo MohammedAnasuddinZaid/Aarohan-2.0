@@ -318,6 +318,9 @@ describe("pairing tokens", () => {
       action: "rotate",
       session: "AB12",
       pair: token,
+      // The current token is sent as proof of possession, or the server refuses
+      // to hand the bed to a caller that cannot prove it already holds it.
+      proof: "old-token",
     });
   });
 

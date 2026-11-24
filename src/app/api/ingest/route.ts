@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionStore } from "@/lib/server/store";
 import { sanitizeVitals } from "@/lib/server/vitals";
 import { demoEndpointsEnabled } from "@/lib/care/securityMode";
+import { hashToken, safeEqual } from "@/lib/care/crypto";
 
 export const dynamic = "force-dynamic";
 
@@ -37,8 +38,11 @@ function evictOldestThrottles(): void {
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const token = process.env.CARESPEAK_DEVICE_TOKEN;
   if (token) {
-    const provided = request.headers.get("x-device-token");
-    if (provided !== token) {
+    const provided = request.headers.get("x-device-token") ?? "";
+    // Constant-time compare over SHA-256 digests: a byte-by-byte length/prefix
+    // oracle on a plain `!==` would let a network attacker recover the shared
+    // device token, which authorises SOS injection.
+    if (!provided || !safeEqual(hashToken(provided), hashToken(token))) {
       return NextResponse.json({ ok: false, error: "Unauthorized device" }, { status: 401 });
     }
   } else if (!demoEndpointsEnabled()) {

@@ -63,6 +63,10 @@ export function peekPairToken(sessionId: string): string {
 /** Invalidate every QR printed with the old token. */
 export function regeneratePairToken(sessionId: string): string {
   if (typeof window === "undefined") return "";
+  // The server requires proof that we hold the CURRENT token before rotating —
+  // otherwise any device that knows this bed's session id could seize its QR
+  // token and mute the patient's own alerts. Read ours before overwriting it.
+  const proof = peekPairToken(sessionId);
   const token = randomToken();
   try {
     localStorage.setItem(TOKEN_PREFIX + sessionId, token);
@@ -73,7 +77,7 @@ export function regeneratePairToken(sessionId: string): string {
   void fetch("/api/pair", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "rotate", session: sessionId, pair: token }),
+    body: JSON.stringify({ action: "rotate", session: sessionId, pair: token, proof }),
   }).catch(() => {});
   return token;
 }

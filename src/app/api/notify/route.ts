@@ -55,14 +55,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   // Dispatching real SMS/WhatsApp is a state-changing, cost-bearing action.
-  // Once a bed has registered a QR token it must be presented; strict mode
-  // additionally refuses unpaired sessions without a nurse session.
+  // Require proof whenever the request can actually reach a provider: with
+  // MSG91 configured, an unauthenticated caller could otherwise spoof
+  // emergency texts to a family's phone and drain the SMS account from a public
+  // URL. Strict mode requires proof regardless. The keyless logging-only demo
+  // path stays open so the hackathon chain remains observable end-to-end.
+  const providerConfigured = Boolean(process.env.MSG91_AUTH_KEY);
   const access = await authorizeSyncSession(req, session, body.pair ?? null, {
-    requireProof: isStrictSecurity(),
+    requireProof: isStrictSecurity() || providerConfigured,
   });
   if (!access.allowed) {
     return NextResponse.json(
-      { ok: false, error: "Sign in or scan the patient's QR code to send alerts." },
+      {
+        ok: false,
+        error: providerConfigured
+          ? "Sign in or scan the patient's QR code: a messaging provider is configured, so dispatch requires proof."
+          : "Sign in or scan the patient's QR code to send alerts.",
+      },
       { status: 401 }
     );
   }

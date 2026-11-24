@@ -144,25 +144,72 @@ export async function verifyPairTokenPersistent(session: string, token: string):
   }
 }
 
+export type RotateOutcome =
+  | { ok: true; token: string }
+  | { ok: false; reason: "not_registered" | "forbidden" };
+
+function newPairToken(preferred?: string): string {
+  return preferred && preferred.length <= 64 ? preferred : crypto.randomUUID().replace(/-/g, "");
+}
+
+/**
+ * Rotate a bed's QR token — but ONLY for a caller that proves it already holds
+ * the current token. Rotation is a capability transfer: without the proof,
+ * anyone who knows a bed's (public, ward-listed) session id could replace its
+ * token, which would silently cut the patient's own alerts off from the nurse
+ * console and hand read access to the attacker. `rotatePairTokenPersistent`
+ * therefore fails closed (`forbidden`) when the proof is missing or wrong.
+ *
+ * A signed-in nurse can still rotate via `forceRotatePairTokenPersistent` (see
+ * the /api/pair route) so a genuinely lost console can be recovered.
+ */
 export async function rotatePairTokenPersistent(
   session: string,
-  token?: string
+  next?: string,
+  proof?: string | null
+): Promise<RotateOutcome> {
+  const key = norm(session);
+  if (!key) return { ok: false, reason: "not_registered" };
+  const token = newPairToken(next);
+  try {
+    const d = await getDriver();
+    const stored = asStoredPair(await d.getDoc(K.pair(key)));
+    if (!stored) return { ok: false, reason: "not_registered" };
+    if (!proof || proof !== stored.token) return { ok: false, reason: "forbidden" };
+    await d.setDoc(K.pair(key), { token, registeredAt: Date.now() });
+    rotatePairToken(key, token);
+    return { ok: true, token };
+  } catch {
+    // Storage unavailable: enforce the same proof rule against the in-process
+    // registry so the security property does not depend on store reachability.
+    if (!hasRegistration(key)) return { ok: false, reason: "not_registered" };
+    if (!proof || !verifyPairToken(key, proof)) return { ok: false, reason: "forbidden" };
+    rotatePairToken(key, token);
+    return { ok: true, token };
+  }
+}
+
+/**
+ * Unconditional rotate/register — the nurse-authenticated recovery path only.
+ * Callers MUST verify a signed-in nurse before invoking this; it deliberately
+ * performs no proof check of its own.
+ */
+export async function forceRotatePairTokenPersistent(
+  session: string,
+  next?: string
 ): Promise<string | null> {
   const key = norm(session);
   if (!key) return null;
-  const hadRegistration = hasRegistration(key);
-  let exists = hadRegistration;
+  const token = newPairToken(next);
   try {
     const d = await getDriver();
-    if (!exists) exists = asStoredPair(await d.getDoc(K.pair(key))) !== null;
-    if (!exists) return null;
-    const next = token && token.length <= 64 ? token : crypto.randomUUID().replace(/-/g, "");
-    await d.setDoc(K.pair(key), { token: next, registeredAt: Date.now() });
-    rotatePairToken(key, next);
-    return next;
+    await d.setDoc(K.pair(key), { token, registeredAt: Date.now() });
+    rotatePairToken(key, token);
+    return token;
   } catch {
-    const next = rotatePairToken(key, token);
-    return next;
+    if (!hasRegistration(key)) registerPairToken(key, token);
+    else rotatePairToken(key, token);
+    return token;
   }
 }
 
