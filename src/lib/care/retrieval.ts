@@ -108,9 +108,13 @@ const SYNONYMS: Record<string, string[]> = {
   sat: ["oxygen", "saturation", "spo2"],
   oxygen: ["spo2", "saturation", "sats"],
   saturation: ["spo2", "oxygen", "sats"],
-  steroid: ["steroids", "corticosteroid", "medication"],
-  antibiotic: ["antibiotics", "antimicrobial", "medication", "infection"],
-  antibiotics: ["antibiotic", "antimicrobial", "medication", "infection"],
+  // Drug-class synonyms may widen to the generic word "medication" (a medicine
+  // pointing at other medicines), but must NOT cross into a diagnosis or a
+  // symptom: an antibiotic is not an "infection", and a steroid is not a
+  // "medication" in the symptom/diagnosis sense the other way round.
+  steroid: ["steroids", "corticosteroid", "corticosteroids", "medication"],
+  antibiotic: ["antibiotics", "antimicrobial", "antibacterial", "medication"],
+  antibiotics: ["antibiotic", "antimicrobial", "antibacterial", "medication"],
   temp: ["temperature", "fever"],
   med: ["medication", "medicine", "drug"],
   meds: ["medication", "medicine", "drug"],
@@ -118,14 +122,17 @@ const SYNONYMS: Record<string, string[]> = {
   medicines: ["medication", "drug"],
   allergy: ["allergies", "reaction", "anaphylaxis"],
   allergies: ["allergy", "reaction"],
-  sugar: ["glucose", "diabetes", "blood"],
+  sugar: ["glucose", "diabetes"],
   glucose: ["sugar", "diabetes"],
   breath: ["breathless", "breathlessness", "dyspnoea", "dyspnea", "respiratory"],
   breathless: ["breathlessness", "dyspnoea", "dyspnea", "oxygen"],
   breathlessness: ["dyspnoea", "dyspnea", "oxygen", "respiratory"],
   dyspnoea: ["breathless", "breathlessness", "respiratory"],
   dyspnea: ["breathless", "breathlessness", "respiratory"],
-  water: ["fluid", "diuretic", "furosemide", "swelling", "oedema", "edema"],
+  // "water" is a hydration word, not a drug name. It must never expand into a
+  // specific diuretic (e.g. furosemide) or a swelling synonym, or a question
+  // about drinking water would surface a medication passage.
+  water: ["fluid", "hydration", "intake", "output", "drink", "drinking"],
   swelling: ["oedema", "edema", "fluid", "ankle"],
   swollen: ["swelling", "oedema", "edema", "fluid"],
   dizzy: ["dizziness", "vertigo", "orthostatic", "falls"],
@@ -148,7 +155,6 @@ const SYNONYMS: Record<string, string[]> = {
   xray: ["scan", "imaging", "x-ray"],
   wound: ["incision", "surgical", "dressing", "infection"],
   operation: ["surgery", "surgical", "procedure", "operative"],
-  thin: ["anticoagulant", "warfarin", "apixaban", "rivaroxaban"],
   gasping: ["breathless", "respiratory", "oxygen"],
   unconscious: ["collapsed", "unresponsive", "alertness"],
   confused: ["confusion", "delirium", "alertness"],
@@ -157,7 +163,7 @@ const SYNONYMS: Record<string, string[]> = {
   sleep: ["insomnia", "night", "orthopnoea"],
   appetite: ["eating", "weight", "nutrition"],
   walk: ["mobility", "walking", "exercise", "falls"],
-  fluid: ["water", "oedema", "edema", "intake", "output", "diuretic"],
+  fluid: ["water", "hydration", "oedema", "edema", "intake", "output"],
   sepsis: ["infection", "fever", "septic"],
   uti: ["urine", "urinary", "infection"],
   af: ["atrial", "fibrillation"],
@@ -245,7 +251,7 @@ function tokenize(text: string): string[] {
  */
 const MAX_QUERY_TERMS = 16;
 
-function expandTerms(question: string): string[] {
+export function expandTerms(question: string): string[] {
   const base = tokenize(question);
   const out = new Set<string>();
   const byLength = (a: string, b: string) => b.length - a.length || a.localeCompare(b);

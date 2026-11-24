@@ -19,6 +19,8 @@ import CompanionMessageInput from "@/components/CompanionMessageInput";
 import DemoModeControls from "@/components/DemoModeControls";
 import PatientMetricsCard from "@/components/PatientMetricsCard";
 import NurseReplyBanner from "@/components/NurseReplyBanner";
+import QuickPhrases from "@/components/QuickPhrases";
+import type { AacPhrase } from "@/lib/care/aacPhrases";
 
 const GESTURE_GUIDE = [
   { label: "YES", desc: "Thumbs Up", icon: ThumbsUp },
@@ -82,6 +84,15 @@ export default function HandModePage() {
         voiceAlert.speak(g, "hand");
         broadcast(g, entry.description, 1);
       }
+    },
+    [broadcast]
+  );
+
+  // An AAC phrase is logged like a gesture so the nurse console sees it; urgent
+  // phrases fall back to HELP so they escalate, everything else is PHRASE.
+  const sendPhrase = useCallback(
+    (phrase: AacPhrase, spoken: string) => {
+      broadcast(phrase.gesture ?? (phrase.urgent ? "HELP" : "PHRASE"), spoken, 1);
     },
     [broadcast]
   );
@@ -253,6 +264,8 @@ export default function HandModePage() {
             </button>
           </div>
         </div>
+
+        <QuickPhrases className="mt-8" onSend={sendPhrase} />
       </div>
     </div>
   );

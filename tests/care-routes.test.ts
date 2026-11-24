@@ -82,7 +82,7 @@ describe("/api/health", () => {
 
 describe("/api/network-info", () => {
   it("returns only private IPv4 addresses plus the hostname", async () => {
-    const res = await getNetworkInfo();
+    const res = await getNetworkInfo(new NextRequest("https://care.example.com/api/network-info"));
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     const body = (await res.json()) as { hostname: string; lan: Array<{ name: string; address: string }> };

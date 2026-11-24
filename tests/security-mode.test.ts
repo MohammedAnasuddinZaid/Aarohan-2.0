@@ -14,6 +14,8 @@ const KEYS = [
   "NEXT_PUBLIC_CARE_REMOTE_TTS",
   "CARE_NURSE_USER",
   "CARE_NURSE_PASS",
+  "VERCEL",
+  "VERCEL_ENV",
 ] as const;
 
 let saved: Record<string, string | undefined>;
@@ -62,6 +64,25 @@ describe("securityMode", () => {
 
   it("lets an explicit strict win over CARE_DEMO_MODE=1", () => {
     process.env.CARE_SECURITY_MODE = "strict";
+    process.env.CARE_DEMO_MODE = "1";
+    expect(securityMode()).toBe("strict");
+  });
+
+  it("defaults a hosted deployment to strict", () => {
+    process.env.VERCEL = "1";
+    expect(securityMode()).toBe("strict");
+    expect(isStrictSecurity()).toBe(true);
+    expect(demoEndpointsEnabled()).toBe(false);
+  });
+
+  it("lets a hosted deployment explicitly opt into demo", () => {
+    process.env.VERCEL = "1";
+    process.env.CARE_SECURITY_MODE = "demo";
+    expect(securityMode()).toBe("demo");
+  });
+
+  it("stays strict on a hosted deployment even when CARE_DEMO_MODE=1", () => {
+    process.env.VERCEL = "1";
     process.env.CARE_DEMO_MODE = "1";
     expect(securityMode()).toBe("strict");
   });

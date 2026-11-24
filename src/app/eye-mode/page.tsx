@@ -20,6 +20,8 @@ import DemoModeControls from "@/components/DemoModeControls";
 import PatientMetricsCard from "@/components/PatientMetricsCard";
 import NurseReplyBanner from "@/components/NurseReplyBanner";
 import PainScaleOverlay from "@/components/PainScaleOverlay";
+import QuickPhrases from "@/components/QuickPhrases";
+import type { AacPhrase } from "@/lib/care/aacPhrases";
 
 const GESTURE_GUIDE = [
   { label: "YES", desc: "Look Left", icon: ArrowLeft },
@@ -104,6 +106,15 @@ export default function EyeModePage() {
         voiceAlert.speak(g, "eye");
         broadcast(g, entry.description, 1);
       }
+    },
+    [broadcast]
+  );
+
+  // Keyboard/switch alternative to eye tracking: speak a phrase and log it for
+  // the nurse console (urgent phrases escalate as HELP).
+  const sendPhrase = useCallback(
+    (phrase: AacPhrase, spoken: string) => {
+      broadcast(phrase.gesture ?? (phrase.urgent ? "HELP" : "PHRASE"), spoken, 1);
     },
     [broadcast]
   );
@@ -289,6 +300,8 @@ export default function EyeModePage() {
           </div>
 
         </div>
+
+        <QuickPhrases className="mt-8" onSend={sendPhrase} />
 
       </div>
     </div>

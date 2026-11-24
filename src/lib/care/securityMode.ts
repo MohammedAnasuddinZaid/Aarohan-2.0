@@ -11,11 +11,21 @@
  *    token, LAN discovery is disabled, and the sync data plane requires proof
  *    of pairing.
  *
- * The mode is deliberately explicit rather than inferred from NODE_ENV: a
- * production demo deployment must not silently lock its judges out, and a
- * staging box with real data must not silently be open. `/api/health` reports
- * the active mode and every remaining demo affordance so a deployment can be
- * checked from outside without guessing.
+ * Precedence, in order:
+ *   1. `CARE_SECURITY_MODE=strict|demo` — always wins.
+ *   2. `CARE_DEMO_MODE=0` — strict.
+ *   3. A hosted deployment (`VERCEL` set) — strict. The demo affordances assume
+ *      the app runs on the nurse's own machine; on a public URL the same
+ *      endpoints (ward, notify, ingest, sync) are reachable by anyone, so the
+ *      safe default is the closed one. A deliberate public demo must opt back in
+ *      with `CARE_SECURITY_MODE=demo`.
+ *   4. Otherwise — demo (local development).
+ *
+ * This is why NODE_ENV is deliberately not consulted: a *hosted demo* and a
+ * *local production-ish* box must be distinguished by intent, not by a value
+ * Next.js sets for every production build. `/api/health` reports the active mode
+ * and every remaining demo affordance so a deployment can be checked from
+ * outside without guessing.
  */
 
 export type SecurityMode = "demo" | "strict";
@@ -28,6 +38,11 @@ function flag(value: string | undefined): boolean | null {
   return null;
 }
 
+/** True when running on a managed host (Vercel) rather than a local machine. */
+export function isHostedDeployment(): boolean {
+  return Boolean(process.env.VERCEL) || process.env.VERCEL_ENV === "production";
+}
+
 export function securityMode(): SecurityMode {
   const explicit = (process.env.CARE_SECURITY_MODE ?? "").trim().toLowerCase();
   if (explicit === "strict") return "strict";
@@ -35,6 +50,8 @@ export function securityMode(): SecurityMode {
   // `CARE_DEMO_MODE=0` is accepted as an alias because operators reasonably
   // reach for it after seeing the demo warnings.
   if (flag(process.env.CARE_DEMO_MODE) === false) return "strict";
+  // A hosted deployment has no "nurse's own machine" trust boundary.
+  if (isHostedDeployment()) return "strict";
   return "demo";
 }
 
@@ -76,7 +93,9 @@ export function securityPosture(): SecurityPosture {
 
   if (mode === "demo") {
     warnings.push(
-      "SECURITY_MODE=demo: ward data, escalation dispatch and tokenless device ingest are open. Set CARE_SECURITY_MODE=strict before real patient use."
+      isHostedDeployment()
+        ? "SECURITY_MODE=demo was explicitly set on a hosted deployment: ward data, escalation dispatch and tokenless device ingest are open on a public URL. Remove CARE_SECURITY_MODE=demo before real patient use."
+        : "SECURITY_MODE=demo: ward data, escalation dispatch and tokenless device ingest are open. Set CARE_SECURITY_MODE=strict before real patient use."
     );
   }
   if (!nurseConfigured) {
