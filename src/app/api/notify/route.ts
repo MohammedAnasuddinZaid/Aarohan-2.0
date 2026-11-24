@@ -120,7 +120,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   // Demo mode — the chain is fully observable in logs without any keys.
-  console.log(`[notify] would dispatch to ${contacts.length || 0} contact(s):`, message);
+  // Never log the message body: it is PHI-adjacent (patient name + alert text).
+  console.log(`[notify] would dispatch to ${contacts.length || 0} contact(s) (logging-only demo mode).`);
   lastSent.set(key, now);
   return NextResponse.json({ ok: true, provider: "logging-only", dispatched: contacts.length });
 }
