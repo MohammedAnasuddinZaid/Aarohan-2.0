@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "description": "Retrieval evaluation over CareSpeak's synthetic demo charts. Each positive case names a patient and a natural question; `expect` is a distinctive substring that MUST appear in one of the top-5 retrieved passages for that patient. Negative cases (empty `expect`) must NOT be reported as a strong match. Facts are taken from src/lib/care/seedPatients.ts; no claim here is clinical evidence.",
+  "k": 5,
+  "positive": [
+    { "patientId": "pt_0001", "question": "what medications is she on?", "expect": "furosemide" },
+    { "patientId": "pt_0001", "question": "does she have any drug allergies?", "expect": "penicillin" },
+    { "patientId": "pt_0001", "question": "what is her heart condition?", "expect": "heart failure" },
+    { "patientId": "pt_0001", "question": "what is her latest weight?", "expect": "weight" },
+    { "patientId": "pt_0002", "question": "what blood pressure medication is he taking?", "expect": "amlodipine" },
+    { "patientId": "pt_0002", "question": "does he have any allergies?", "expect": "sulfa" },
+    { "patientId": "pt_0002", "question": "does he have sleep apnoea?", "expect": "apnoea" },
+    { "patientId": "pt_0003", "question": "what diabetes medication is she on?", "expect": "gliclazide" },
+    { "patientId": "pt_0003", "question": "what is her latest fasting glucose?", "expect": "glucose" },
+    { "patientId": "pt_0003", "question": "why is she dizzy?", "expect": "dizziness" },
+    { "patientId": "pt_0004", "question": "what reliever inhaler does he use?", "expect": "salbutamol" },
+    { "patientId": "pt_0004", "question": "what is his peak flow?", "expect": "peak flow" },
+    { "patientId": "pt_0004", "question": "what is he allergic to?", "expect": "dust mite" },
+    { "patientId": "pt_0005", "question": "what is her oxygen saturation?", "expect": "spo2" },
+    { "patientId": "pt_0005", "question": "what steroid is she on?", "expect": "prednisolone" },
+    { "patientId": "pt_0005", "question": "what lung disease does she have?", "expect": "obstructive" },
+    { "patientId": "pt_0006", "question": "what antibiotic is he on?", "expect": "amoxicillin" },
+    { "patientId": "pt_0006", "question": "what was his pain score?", "expect": "pain score" },
+    { "patientId": "pt_0007", "question": "list her current medications", "expect": "apixaban" },
+    { "patientId": "pt_0007", "question": "what is she allergic to?", "expect": "codeine" },
+    { "patientId": "pt_0007", "question": "what fracture did she have?", "expect": "femur" },
+    { "patientId": "pt_0008", "question": "what is the potassium level?", "expect": "potassium" },
+    { "patientId": "pt_0008", "question": "what kidney condition does he have?", "expect": "chronic kidney disease" }
+  ],
+  "negative": [
+    { "patientId": "pt_0001", "question": "quantum entanglement experiment on the moon" },
+    { "patientId": "pt_0004", "question": "how do I bake sourdough bread at home" },
+    { "patientId": "pt_0007", "question": "who won the 1994 football world cup" }
+  ]
+}

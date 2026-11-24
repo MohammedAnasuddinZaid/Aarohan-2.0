@@ -299,7 +299,7 @@ describe("session helpers in a server (no-window) context", () => {
   it("creates a server session with a safe id alphabet", () => {
     const session = getOrCreateSession();
     expect(session.deviceId).toBe("server");
-    expect(session.sessionId).toMatch(/^[A-HJ-NP-Z2-9]{6}$/);
+    expect(session.sessionId).toMatch(/^[A-HJ-NP-Z2-9]{8}$/);
   });
 
   it("normalises a manually-entered session id", () => {

@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { GestureLogEntry, NurseReply, ESCALATION_RULES } from "@/types";
 import { getSession, setSessionId, clearSession, rememberCareSession } from "@/lib/session";
+import { peekPairToken } from "@/lib/pairing";
 import { newestMetrics, newestVitals } from "@/lib/liveMetrics";
 import { useLiveSync } from "@/hooks/useLiveSync";
 import { evaluateEscalations } from "@/lib/escalation";
@@ -428,6 +429,7 @@ export default function NurseViewPage() {
               session,
               patient: session,
               gesture: e.gesture,
+              pair: peekPairToken(session) || undefined,
               contacts: (() => {
                 try {
                   return JSON.parse(localStorage.getItem("carespeak_contacts") ?? "[]") as string[];

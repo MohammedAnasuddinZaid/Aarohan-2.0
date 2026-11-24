@@ -3,6 +3,8 @@ import "@/app/globals.css";
 import Navbar from "@/components/Navbar";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
+import MotionProvider from "@/components/MotionProvider";
+import RouteFocus from "@/components/RouteFocus";
 
 export const metadata: Metadata = {
   title: "CareSpeak — Giving Every Patient a Voice",
@@ -41,10 +43,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </a>
         <ServiceWorkerRegister />
         <ErrorBoundary>
-          <Navbar />
-          <main id="main-content" tabIndex={-1} className="min-h-screen">
-            {children}
-          </main>
+          <MotionProvider>
+            <Navbar />
+            <RouteFocus />
+            <main id="main-content" tabIndex={-1} className="min-h-screen">
+              {children}
+            </main>
+          </MotionProvider>
         </ErrorBoundary>
         <footer className="border-t border-[#ececec] bg-white py-16">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">

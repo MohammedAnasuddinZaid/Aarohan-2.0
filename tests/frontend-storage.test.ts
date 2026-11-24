@@ -43,7 +43,7 @@ import {
   registerPairToken,
 } from "@/lib/pairing";
 
-const ID_RE = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/;
+const ID_RE = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/;
 
 afterEach(() => {
   vi.unstubAllGlobals();

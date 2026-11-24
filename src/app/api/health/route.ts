@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSessionStore } from "@/lib/server/store";
+import { securityPosture } from "@/lib/care/securityMode";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,7 @@ export const dynamic = "force-dynamic";
  *  - driver: "redis"  -> cross-instance safe (multi-device sync will work)
  *  - driver: "memory" -> single-instance only; configure Upstash env vars
  *    (UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN) and redeploy.
+ *  - security: active mode and every remaining demo affordance (no secrets).
  */
 export async function GET(): Promise<NextResponse> {
   const store = await getSessionStore();
@@ -15,6 +17,7 @@ export async function GET(): Promise<NextResponse> {
     ok: true,
     driver: store.driver,
     redisConfigured: !!(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN),
+    security: securityPosture(),
     // Vercel injects these into the function at runtime. They make it obvious
     // which build is actually serving traffic when a deploy looks stale.
     commit: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 8) ?? null,

@@ -1,5 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import os from "node:os";
+import { nurseFromRequest } from "@/lib/care/auth";
+import { isStrictSecurity } from "@/lib/care/securityMode";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +18,23 @@ export const dynamic = "force-dynamic";
  */
 const PRIVATE_IPV4 = /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)/;
 
-export async function GET(): Promise<NextResponse> {
+export async function GET(request: NextRequest): Promise<NextResponse> {
+  // A hosted deployment has no LAN worth discovering, and the host name plus
+  // interface list is needless internal detail on a public URL.
+  if (process.env.VERCEL) {
+    return NextResponse.json(
+      { hostname: null, lan: [], hosted: true, serverTime: Date.now() },
+      { headers: { "Cache-Control": "no-store" } }
+    );
+  }
+
+  if (isStrictSecurity() && !(await nurseFromRequest(request))) {
+    return NextResponse.json(
+      { ok: false, error: "Sign in to discover local devices." },
+      { status: 401, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+
   const interfaces = os.networkInterfaces();
   const lan: { name: string; address: string }[] = [];
 

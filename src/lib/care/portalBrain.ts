@@ -43,6 +43,7 @@ import {
   type PatientContext,
 } from "./assistant";
 import { geminiConfigured, geminiGenerate, geminiModelLabel } from "./gemini";
+import { buildCagContext } from "./cag";
 import {
   buildPatientPassages,
   citationList,
@@ -1360,10 +1361,16 @@ export async function askPortal(
     const evidence = retrievalContext(recordHits.passages, 9000);
     const guidance = retrievalContext(generalHits.passages, 3200);
 
+    // CAG: when the whole chart fits the budget, hand the model all of it
+    // instead of only the passages a query matched. Falls back to retrieval.
+    const cag = route.scope === "general" ? null : buildCagContext(patient, records, extras);
+    const useCompleteChart = Boolean(cag?.complete && cag.text);
+    const recordEvidence = useCompleteChart ? cag!.text : evidence;
+
     const prompt = [
       `PATIENT\n${structured(patient)}`,
-      evidence
-        ? `RECORD EVIDENCE\n${evidence}`
+      recordEvidence
+        ? `RECORD EVIDENCE${useCompleteChart ? " (complete chart; every entry is included)" : ""}\n${recordEvidence}`
         : "RECORD EVIDENCE\nNo part of this patient's chart matched the question.",
       guidance ? `GENERAL GUIDANCE\n${guidance}` : "",
       `LIVE SIGNALS\n${signalBlock(ctx.findings, ctx.metrics)}`,

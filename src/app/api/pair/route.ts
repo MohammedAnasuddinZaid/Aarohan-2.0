@@ -15,6 +15,11 @@ function valid(s: unknown): s is string {
   return typeof s === "string" && /^[A-Z0-9_-]{3,32}$/.test(s.toUpperCase());
 }
 
+/** Pairing secrets are client-generated; require enough entropy to be one. */
+function validPair(token: unknown): token is string {
+  return typeof token === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(token);
+}
+
 /**
  * QR pairing + scan tracking.
  *
@@ -36,6 +41,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   const session = body.session.toUpperCase();
   const pair = typeof body.pair === "string" ? body.pair : "";
+
+  // A trivially guessable token would defeat the capability model.
+  if (body.action !== "register" && body.action !== "rotate" && body.action !== "scan") {
+    return NextResponse.json({ ok: false, error: "Unknown action" }, { status: 400 });
+  }
+  if (!validPair(pair)) {
+    return NextResponse.json({ ok: false, error: "Invalid pairing token" }, { status: 400 });
+  }
 
   switch (body.action) {
     case "register": {

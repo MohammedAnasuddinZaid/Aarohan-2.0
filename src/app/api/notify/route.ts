@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { authorizeSyncSession } from "@/lib/care/sessionAccess";
+import { isStrictSecurity } from "@/lib/care/securityMode";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +43,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     patient?: string;
     gesture?: string;
     contacts?: string[];
+    pair?: string;
   } | null;
 
   if (!body?.session || !body.gesture) {
@@ -50,6 +53,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!/^[A-Z0-9_-]{3,32}$/.test(session)) {
     return NextResponse.json({ ok: false, error: "Invalid session" }, { status: 400 });
   }
+
+  // Dispatching real SMS/WhatsApp is a state-changing, cost-bearing action.
+  // Once a bed has registered a QR token it must be presented; strict mode
+  // additionally refuses unpaired sessions without a nurse session.
+  const access = await authorizeSyncSession(req, session, body.pair ?? null, {
+    requireProof: isStrictSecurity(),
+  });
+  if (!access.allowed) {
+    return NextResponse.json(
+      { ok: false, error: "Sign in or scan the patient's QR code to send alerts." },
+      { status: 401 }
+    );
+  }
+
   // Whitelist the gesture and clamp patient text — both are interpolated into
   // provider template variables and drive real messaging costs.
   const gesture = KNOWN_GESTURES.has(body.gesture) ? body.gesture : "EMERGENCY";

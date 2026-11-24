@@ -13,6 +13,7 @@
 import type { NextRequest } from "next/server";
 import { hashToken, newToken, safeEqual } from "./crypto";
 import { delLogin, getLogin, putLogin, type LoginRecord } from "./repo";
+import { demoCredentialsEnabled } from "./securityMode";
 
 export const NURSE_COOKIE = "care_session";
 export const PARTICIPANT_HEADER = "x-care-participant";
@@ -31,14 +32,20 @@ interface Credential {
 }
 
 function credentials(): Credential[] {
-  const nurseUser = process.env.CARE_NURSE_USER || "nurse.demo";
-  const nursePass = process.env.CARE_NURSE_PASS || "nurse.demo";
+  // Both halves must be set. Previously a configured username with an unset
+  // password silently fell back to the literal "nurse.demo".
+  const envUser = process.env.CARE_NURSE_USER?.trim();
+  const envPass = process.env.CARE_NURSE_PASS;
+  const configured = Boolean(envUser && envPass);
+  if (!configured && !demoCredentialsEnabled()) return [];
+
   const list: Credential[] = [
     {
       userId: "nurse_1",
-      username: nurseUser,
-      password: nursePass,
-      displayName: process.env.CARE_NURSE_NAME || "Nurse Demo",
+      username: configured ? envUser! : "nurse.demo",
+      password: configured ? envPass! : "nurse.demo",
+      displayName:
+        process.env.CARE_NURSE_NAME || (configured ? "Nurse" : "Nurse Demo"),
       role: "nurse",
     },
   ];

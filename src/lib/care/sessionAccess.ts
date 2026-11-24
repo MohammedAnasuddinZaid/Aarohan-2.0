@@ -71,7 +71,8 @@ function remember<K, V>(map: Map<K, V>, key: K, value: V): void {
 export async function authorizeSyncSession(
   req: NextRequest,
   session: string,
-  pair?: string | null
+  pair?: string | null,
+  options: { requireProof?: boolean } = {}
 ): Promise<SessionAccess> {
   const key = session.toUpperCase();
   const now = Date.now();
@@ -84,7 +85,8 @@ export async function authorizeSyncSession(
     registered = await hasRegistrationPersistent(key);
     remember(registrationCache, key, { at: now, registered });
   }
-  if (!registered) return { allowed: true };
+  if (!registered && !options.requireProof) return { allowed: true };
+  if (!registered) return authorizeSession(req, key, pair ?? null);
 
   if (!pair) return authorizeSession(req, key, null);
 

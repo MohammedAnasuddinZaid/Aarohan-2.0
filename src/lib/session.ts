@@ -16,6 +16,14 @@ function randomId(length = 6): string {
   return out;
 }
 
+/**
+ * Session ids are shared as a QR/room code, so they stay human-typeable, but
+ * six characters of a 32-symbol alphabet is only ~30 bits of entropy. Eight
+ * (~40 bits) makes online guessing of an unpaired demo session materially
+ * harder while remaining one short code on a printed wristband.
+ */
+const SESSION_ID_LENGTH = 8;
+
 export function generateDeviceId(): string {
   if (typeof window !== "undefined") {
     try {
@@ -34,7 +42,7 @@ export function generateDeviceId(): string {
 
 export function getOrCreateSession(): SessionInfo {
   if (typeof window === "undefined") {
-    return { sessionId: randomId(), deviceId: "server", createdAt: Date.now() };
+    return { sessionId: randomId(SESSION_ID_LENGTH), deviceId: "server", createdAt: Date.now() };
   }
   try {
     const stored = localStorage.getItem(SESSION_KEY);
@@ -44,7 +52,7 @@ export function getOrCreateSession(): SessionInfo {
     }
   } catch {}
   const session: SessionInfo = {
-    sessionId: randomId(),
+    sessionId: randomId(SESSION_ID_LENGTH),
     deviceId: generateDeviceId(),
     createdAt: Date.now(),
   };

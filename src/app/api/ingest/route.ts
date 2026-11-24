@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionStore } from "@/lib/server/store";
 import { sanitizeVitals } from "@/lib/server/vitals";
+import { demoEndpointsEnabled } from "@/lib/care/securityMode";
 
 export const dynamic = "force-dynamic";
 
@@ -29,8 +30,9 @@ function evictOldestThrottles(): void {
  * - "sos"     -> creates an EMERGENCY entry that fans out to every console
  *                exactly like a patient gesture (buzzer + dashboard + TTS).
  *
- * If CARESPEAK_DEVICE_TOKEN is unset the endpoint runs in demo mode (accepts
- * all requests) so judges can test hardware without configuring secrets.
+ * If CARESPEAK_DEVICE_TOKEN is unset the endpoint accepts unauthenticated
+ * traffic ONLY in demo mode. In strict mode a missing token refuses every
+ * request, because a spoofed SOS or vital sign is a clinical safety issue.
  */
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const token = process.env.CARESPEAK_DEVICE_TOKEN;
@@ -39,6 +41,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (provided !== token) {
       return NextResponse.json({ ok: false, error: "Unauthorized device" }, { status: 401 });
     }
+  } else if (!demoEndpointsEnabled()) {
+    return NextResponse.json(
+      { ok: false, error: "Device ingest is disabled: CARESPEAK_DEVICE_TOKEN is not set." },
+      { status: 503, headers: { "Cache-Control": "no-store" } }
+    );
   }
 
   const body = (await request.json().catch(() => null)) as {

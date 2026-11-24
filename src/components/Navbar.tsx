@@ -73,6 +73,25 @@ export default function Navbar() {
     return () => document.removeEventListener("mousedown", onDown);
   }, []);
 
+  // Navigating away should never leave a menu hanging open behind the new page.
+  useEffect(() => {
+    setOpen(false);
+    setOpenGroup(null);
+    setLangOpen(false);
+  }, [pathname]);
+
+  // Escape closes whatever overlay is open — keyboard users can always exit.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setOpen(false);
+      setOpenGroup(null);
+      setLangOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
   const handleLanguageChange = (lang: SupportedLanguage) => {
     voiceAlert.setLanguage(lang);
     setLangOpen(false);
@@ -126,6 +145,7 @@ export default function Navbar() {
                     type="button"
                     aria-haspopup="true"
                     aria-expanded={openGroup === group.label}
+                    aria-controls={`nav-menu-${group.label}`}
                     onClick={() => setOpenGroup((g) => (g === group.label ? null : group.label))}
                     className={topButtonClass(active)}
                   >
@@ -136,6 +156,7 @@ export default function Navbar() {
                   <AnimatePresence>
                     {openGroup === group.label && (
                       <motion.div
+                        id={`nav-menu-${group.label}`}
                         initial={{ opacity: 0, y: -6, scale: 0.98 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: -6, scale: 0.98 }}
@@ -185,8 +206,9 @@ export default function Navbar() {
               <button
                 type="button"
                 aria-label={`Change language. Current language: ${currentLangInfo.label}`}
-                aria-haspopup="menu"
+                aria-haspopup="true"
                 aria-expanded={langOpen}
+                aria-controls="language-menu"
                 onClick={() => setLangOpen(!langOpen)}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm transition-all duration-200 ${
                   showSolid ? "text-[#6e6e6e] hover:text-[#1f1f1f] hover:bg-[#f5f3f0]" : "text-white/70 hover:text-white hover:bg-white/10"
@@ -198,6 +220,7 @@ export default function Navbar() {
               <AnimatePresence>
                 {langOpen && (
                   <motion.div
+                    id="language-menu"
                     initial={{ opacity: 0, y: -8, scale: 0.96 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: -8, scale: 0.96 }}
@@ -205,6 +228,7 @@ export default function Navbar() {
                   >
                     {(Object.entries(SUPPORTED_LANGUAGES) as [SupportedLanguage, { label: string; native: string }][]).map(([code, info]) => (
                       <button key={code} type="button" onClick={() => handleLanguageChange(code)}
+                        aria-pressed={currentLang === code}
                         className={`w-full text-left px-4 py-2.5 text-sm transition-colors flex items-center gap-2 ${
                           currentLang === code ? "text-[#c63a22] bg-[#c63a22]/5 font-medium" : "text-[#6e6e6e] hover:text-[#1f1f1f] hover:bg-[#f5f3f0]"
                         }`}

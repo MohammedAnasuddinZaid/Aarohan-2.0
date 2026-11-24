@@ -64,6 +64,8 @@ export interface RetrievedPassage extends Passage {
   score: number;
   excerpt: string;
   matchedTerms: string[];
+  /** Query terms that appear literally in the passage (no fuzzy/prefix alone). */
+  literalTerms?: string[];
 }
 
 export interface RetrievalOptions {
@@ -102,8 +104,13 @@ const SYNONYMS: Record<string, string[]> = {
   bp: ["blood", "pressure"],
   hr: ["heart", "rate", "pulse"],
   spo2: ["oxygen", "saturation", "sats"],
-  sats: ["oxygen", "saturation"],
-  sat: ["oxygen", "saturation"],
+  sats: ["oxygen", "saturation", "spo2"],
+  sat: ["oxygen", "saturation", "spo2"],
+  oxygen: ["spo2", "saturation", "sats"],
+  saturation: ["spo2", "oxygen", "sats"],
+  steroid: ["steroids", "corticosteroid", "medication"],
+  antibiotic: ["antibiotics", "antimicrobial", "medication", "infection"],
+  antibiotics: ["antibiotic", "antimicrobial", "medication", "infection"],
   temp: ["temperature", "fever"],
   med: ["medication", "medicine", "drug"],
   meds: ["medication", "medicine", "drug"],
@@ -161,6 +168,25 @@ const SYNONYMS: Record<string, string[]> = {
   pe: ["pulmonary", "embolism"],
   copd: ["respiratory", "lungs", "smoking"],
 };
+
+/**
+ * Passage kinds that count as chart evidence when scoring confidence. Free-text
+ * transcripts and messages are excluded so ordinary conversation words cannot
+ * make an unrelated question look grounded in the record.
+ */
+const EVIDENCE_KINDS = new Set<PassageKind>([
+  "profile",
+  "condition",
+  "medication",
+  "allergy",
+  "observation",
+  "encounter",
+  "careplan",
+  "record",
+  "report",
+  "task",
+  "knowledge",
+]);
 
 /**
  * Compact clinical spellings that a naive letter/digit split tears apart:
@@ -684,6 +710,7 @@ export function retrievePassages(
     // and prefix matches. Without them a typo like "potasium" was found by the
     // index and then thrown away by the literal word check below.
     const fuzzyMatched = new Set((hit.queryTerms ?? []).map(stem));
+    const literalTerms = terms.filter((t) => hasTerm(hay, t));
     const matchedTerms = terms.filter((t) => fuzzyMatched.has(stem(t)) || hasTerm(hay, t));
     if (matchedTerms.length < minMatched) continue;
     const titleWords = wordSets(passage.title);
@@ -700,15 +727,35 @@ export function retrievePassages(
       score: hit.score * weight * (titleFocus ? 1.15 : 1) + recency,
       excerpt: excerptFor(passage.text, terms),
       matchedTerms,
+      literalTerms,
     });
   }
 
   scored.sort((a, b) => b.score - a.score);
   const top = scored.slice(0, limit);
-  const topTerms = new Set(top.flatMap((p) => p.matchedTerms));
+  // Confidence must come from substantive clinical passages. A term counts when
+  // it appears literally, or when it is long enough that a fuzzy hit is almost
+  // certainly a typo of a real clinical word ("potasium" -> "potassium").
+  // Short fuzzy collisions ("bread" ~ "breath") and demographics like a room
+  // named "Home care" are excluded so they cannot fake a grounded answer.
+  const topTerms = new Set(
+    top
+      .filter((p) => p.kind !== "profile" && EVIDENCE_KINDS.has(p.kind))
+      .flatMap((p) => {
+        const literal = new Set(p.literalTerms ?? []);
+        return p.matchedTerms.filter((t) => literal.has(t) || t.length >= 6);
+      })
+  );
   const meaningful = terms.filter((t) => t.length > 3);
   const coverage = meaningful.length ? meaningful.filter((t) => topTerms.has(t)).length / meaningful.length : 0;
-  const strong = Boolean(top.length) && (coverage >= 0.34 || top[0].matchedTerms.some((t) => t.length >= 6));
+  // A long query term counts as decisive only when it literally appears in the
+  // best passage. Fuzzy-only matches used to flip unrelated questions to a
+  // confident match.
+  const bestHay = top.length ? wordSets(passageSearchText(top[0])) : null;
+  const literalFocus = bestHay
+    ? top[0].matchedTerms.some((t) => t.length >= 6 && hasTerm(bestHay, t))
+    : false;
+  const strong = Boolean(top.length) && (coverage >= 0.34 || literalFocus);
 
   return { passages: top, strong, terms };
 }

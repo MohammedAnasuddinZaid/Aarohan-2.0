@@ -49,6 +49,7 @@ const BAND_STYLE: Record<Band, { ring: string; chip: string; label: string }> = 
 export default function WardPage() {
   const [rows, setRows] = useState<WardRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [authRequired, setAuthRequired] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [bandFilter, setBandFilter] = useState<"all" | Band>("all");
   const [query, setQuery] = useState("");
@@ -57,9 +58,15 @@ export default function WardPage() {
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/ward", { cache: "no-store" });
-      if (res.ok) {
+      if (res.status === 401) {
+        // Strict mode: the ward is clinical data. Show a sign-in path rather
+        // than an empty board that looks like no patients are connected.
+        setAuthRequired(true);
+        setRows([]);
+      } else if (res.ok) {
         const data = (await res.json()) as { sessions?: WardRow[] };
         setRows(data.sessions ?? []);
+        setAuthRequired(false);
       }
     } catch {}
     setLoading(false);
@@ -67,6 +74,8 @@ export default function WardPage() {
 
   useEffect(() => {
     void load();
+    // A 401 will not fix itself; stop polling until the nurse signs in.
+    if (authRequired) return;
     const poll = setInterval(() => {
       // No point burning requests for a hidden tab; the 1s clock keeps bands
       // fresh so the board is correct the instant it's visible again.
@@ -79,7 +88,7 @@ export default function WardPage() {
       clearInterval(clock);
       document.title = originalTitle.current;
     };
-  }, [load]);
+  }, [load, authRequired]);
 
   /* ── counts per band ── (`now` in deps: active/idle cutoffs age every second) */
   const counts = useMemo(() => {
@@ -177,7 +186,19 @@ export default function WardPage() {
           />
         </div>
 
-        {loading ? (
+        {authRequired ? (
+          <div className="card p-12 text-center max-w-xl mx-auto" role="alert">
+            <BedDouble className="w-10 h-10 text-[#c63a22] mx-auto mb-4" />
+            <p className="font-semibold text-[#1f1f1f]">Nurse sign-in required</p>
+            <p className="text-sm text-[#6e6e6e] mt-2">
+              The ward board shows live patient status, so this deployment asks for a
+              nurse session before loading it.
+            </p>
+            <a href="/care" className="btn-primary inline-flex items-center gap-2 px-5 py-2.5 text-sm mt-5">
+              Sign in to continue
+            </a>
+          </div>
+        ) : loading ? (
           <div className="card p-12 text-center text-sm text-[#6e6e6e]">Loading ward…</div>
         ) : rows.length === 0 ? (
           <div className="card p-16 text-center">

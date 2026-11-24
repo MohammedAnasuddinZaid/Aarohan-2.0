@@ -1,7 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getSessionStore } from "@/lib/server/store";
 import { newestMetrics, newestVitals } from "@/lib/liveMetrics";
 import { getPairSummary } from "@/lib/server/pairing";
+import { nurseFromRequest } from "@/lib/care/auth";
+import { isStrictSecurity } from "@/lib/care/securityMode";
 
 export const dynamic = "force-dynamic";
 
@@ -10,8 +12,19 @@ export const dynamic = "force-dynamic";
  * GET /api/ward -> recently-active sessions with compact summaries so a single
  * nurse can monitor an entire ward from one screen. Includes per-bed QR pairing
  * telemetry (linked devices, last scan IP/time). Pairs with /ward (UI).
+ *
+ * In strict mode this is a clinical record and requires a nurse session. Demo
+ * mode keeps the open board so the hackathon flow still works; `/api/health`
+ * advertises the active mode.
  */
-export async function GET(): Promise<NextResponse> {
+export async function GET(request: NextRequest): Promise<NextResponse> {
+  if (isStrictSecurity() && !(await nurseFromRequest(request))) {
+    return NextResponse.json(
+      { ok: false, error: "Sign in to view the ward." },
+      { status: 401, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+
   const store = await getSessionStore();
   const sessions = await store.getActiveSessions();
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
