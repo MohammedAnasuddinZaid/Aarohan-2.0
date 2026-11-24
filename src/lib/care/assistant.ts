@@ -21,6 +21,7 @@ import type {
   ClinicalPatient,
   PatientMessage,
 } from "./types";
+import { chartQuestionStrings } from "./demoQuestions";
 
 export interface PatientContext {
   patient: ClinicalPatient;
@@ -269,8 +270,12 @@ export function suggestedQuestions(ctx: AssistantContext): string[] {
   ];
   if (!c) return base;
   const name = firstName(c.patient);
+  // Chart-grounded prompts first, so a demo has real, answerable questions for
+  // whatever patient is in focus; the generic prompts follow for the rest.
+  const chart = chartQuestionStrings(c.patient).slice(0, 3);
   return [
     `Summarise ${name}`,
+    ...chart,
     `What medications is ${name} on?`,
     `Any allergies for ${name}?`,
     `What did ${name} say in the last call?`,

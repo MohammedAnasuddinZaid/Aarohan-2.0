@@ -44,6 +44,7 @@ import {
 } from "./assistant";
 import { geminiConfigured, geminiGenerate, geminiModelLabel } from "./gemini";
 import { buildCagContext } from "./cag";
+import { chartQuestionStrings } from "./demoQuestions";
 import {
   buildPatientPassages,
   citationList,
@@ -595,20 +596,21 @@ export interface PortalContext {
   suggestedQuestions: string[];
 }
 
-function suggestionsFor(patient: ClinicalPatient | null, findings: SignalFinding[]): string[] {
+function suggestionsFor(
+  patient: ClinicalPatient | null,
+  findings: SignalFinding[],
+  recordTitles: string[] = []
+): string[] {
   const name = patient?.displayName.split(" ")[0] ?? "the patient";
   const out: string[] = [];
   if (findings.length) out.push("Is this urgent? What should I check first?");
   if (patient) {
+    // Chart-grounded first: these are questions whose answers are provably in
+    // the retrieved passages, so a demo (or a real shift) never has to guess.
+    out.push(...chartQuestionStrings(patient, { recordTitles }).slice(0, 4));
     out.push(`What changed for ${name} since the last call?`);
-    out.push(`Explain ${name}'s main condition in plain English`);
-    out.push(`What medications is ${name} on?`);
-    out.push(`Any allergies or safety concerns for ${name}?`);
-    out.push(`Summarise ${name}'s inserted records`);
     out.push("Draft an SBAR handoff");
-    out.push("Which reading is closest to its threshold?");
-    const followUp = patient.primaryConcern?.match(/follow[- ]?up|review|check/i);
-    if (followUp) out.push(`What should I ask ${name} on the follow-up call?`);
+    out.push(`What should I ask ${name} on the next call?`);
   } else {
     out.push("What are the live readings?");
     out.push("Is anything urgent right now?");
@@ -692,7 +694,11 @@ export async function buildPortalContext(sessionId: string): Promise<PortalConte
     worst: worstSeverity(findings),
     engine: { gemini: geminiConfigured(), model: geminiModelLabel() },
     patients: patients.map((p) => ({ id: p.id, displayName: p.displayName, room: p.room, synthetic: p.synthetic })),
-    suggestedQuestions: suggestionsFor(patient, findings),
+    suggestedQuestions: suggestionsFor(
+      patient,
+      findings,
+      records.map((r) => r.title)
+    ),
   };
 }
 
@@ -1179,7 +1185,11 @@ export async function askPortal(
 
   const question = rawQuestion.trim().slice(0, 1000);
   const ctx = await buildPortalContext(sessionId);
-  const followUps = suggestionsFor(ctx.patient, ctx.findings).slice(0, 3);
+  const followUps = suggestionsFor(
+    ctx.patient,
+    ctx.findings,
+    ctx.records.map((r) => r.title)
+  ).slice(0, 3);
 
   const lastAssistant =
     [...history].reverse().find((t) => t.role === "assistant")?.text ?? null;

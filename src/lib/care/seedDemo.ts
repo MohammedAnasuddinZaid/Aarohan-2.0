@@ -30,7 +30,7 @@ let inFlight: Promise<void> | null = null;
 let recordsInFlight: Promise<void> | null = null;
 
 /** Bump when DEMO_RECORDS changes so existing stores receive the new documents. */
-const RECORDS_SEED_VERSION = 2;
+const RECORDS_SEED_VERSION = 3;
 
 export function ensureDemoSeed(): Promise<void> {
   // Never let demo seeding break a real request.
@@ -490,6 +490,195 @@ Discharge plan: complete seven days of intravenous antibiotics through the hospi
 Temperature 36.9 °C, blood pressure 108/64 mmHg, heart rate 92 bpm, respiratory rate 18/min. White cell count down to 11.2 ×10⁹/L. Blood glucose 9.1 mmol/L.
 Catheter care: wash daily with water, keep the bag off the floor, empty when two-thirds full and secure the tubing to prevent traction.
 Safety advice: report fever, shivering, confusion, lower abdominal pain, reduced urine output or cloudy, offensive urine. Trial without catheter planned after the antibiotic course.`,
+  },
+  {
+    id: "rec_seed_pt_0015_stent",
+    patientId: "pt_0015",
+    title: "Discharge summary — heart attack with a coronary stent",
+    source: "Hospital discharge",
+    daysAgo: 6,
+    hour: 20,
+    text: `Admitted with central chest pain and sweating. ECG showed an ST-elevation heart attack and the troponin rose from 890 to 310 ng/L over twelve hours. Emergency angiography found a blocked left anterior descending artery, treated with a drug-eluting stent within ninety minutes of arrival.
+Discharge medicines: aspirin 75 mg once daily and ticagrelor 90 mg twice daily (dual antiplatelet therapy for twelve months — must not be stopped without cardiology advice), atorvastatin 80 mg at night, metoprolol 50 mg twice daily and ramipril 5 mg once daily. Metformin 500 mg twice daily continued for diabetes.
+Echocardiogram: left ventricular ejection fraction 48%. Blood pressure 118/74 mmHg and heart rate 62 bpm on discharge.
+Advice given: report chest pain, breathlessness, fainting or unusual bleeding and bruising. No heavy lifting for six weeks; attend cardiac rehabilitation.`,
+  },
+  {
+    id: "rec_seed_pt_0015_rehab",
+    patientId: "pt_0015",
+    title: "Cardiac rehabilitation plan",
+    source: "Cardiac rehabilitation",
+    daysAgo: 3,
+    hour: 11,
+    text: `First rehabilitation session. Walked 400 metres without chest pain and stopped at a moderate level of effort.
+Plan: build up to 30 minutes of walking most days, continue the home exercise sheet, and attend supervised sessions twice a week. Aim to stay completely off cigarettes, which he has done since the heart attack.
+Medicines reviewed: no missed doses of aspirin or ticagrelor. Discussed that ticagrelor can cause easy bruising and that any bleeding should be reported.
+Safety advice: stop and rest if chest pain, breathlessness or dizziness develops and call for help if it does not settle.`,
+  },
+  {
+    id: "rec_seed_pt_0016_admission",
+    patientId: "pt_0016",
+    title: "Admission note — dengue fever with warning signs",
+    source: "Hospital admission",
+    daysAgo: 5,
+    hour: 21,
+    text: `Day 3 of fever with severe body aches, a red rash and a metallic taste. Dengue NS1 antigen positive. Platelet count 180 ×109/L and haematocrit 42% on admission.
+Started oral fluids and paracetamol only. Ibuprofen, aspirin and other anti-inflammatory painkillers must be avoided because they increase the risk of bleeding.
+Monitoring plan: platelet count, haematocrit and blood pressure twice daily, and strict attention to warning signs — abdominal pain, persistent vomiting, bleeding gums or nose, black stools, cold clammy skin or drowsiness.
+Fluid balance charted and urine output maintained.`,
+  },
+  {
+    id: "rec_seed_pt_0016_platelets",
+    patientId: "pt_0016",
+    title: "Daily platelet and haematocrit log",
+    source: "Hospital monitoring",
+    daysAgo: 1,
+    hour: 8,
+    text: `Platelet count falling: 180 ×109/L, then 95, then 42. Haematocrit rising: 42%, 46%, 48%. A rising haematocrit with a falling platelet count suggests plasma leakage and the critical phase of dengue.
+Temperature 39.1 °C on day 3, 38.2 °C on day 4 and 37.4 °C today. Blood pressure 104/68 mmHg with a narrow pulse pressure.
+Patient reported gum bleeding when brushing her teeth and mild abdominal pain. The doctor was informed; close observation continued, with intravenous fluids considered if the blood pressure falls or urine output drops.`,
+  },
+  {
+    id: "rec_seed_pt_0017_start",
+    patientId: "pt_0017",
+    title: "Tuberculosis treatment initiation note",
+    source: "Tuberculosis clinic",
+    daysAgo: 62,
+    hour: 10,
+    text: `Sputum tested positive for tuberculosis and sensitive to all first-line drugs. Started on four medicines once daily: isoniazid 300 mg, rifampicin 600 mg, pyrazinamide 1500 mg and ethambutol 800 mg, with pyridoxine 25 mg to prevent nerve damage.
+Baseline weight 48.0 kg and HbA1c 9.8%. Liver tests were normal before starting.
+Counselled to take the tablets at the same time every day without missing doses, to avoid alcohol, and that rifampicin turns urine and tears orange. Warned that rifampicin reduces the effect of many other medicines, including some contraceptives.
+Plan: monthly weight and liver tests, and a sputum check at two months.`,
+  },
+  {
+    id: "rec_seed_pt_0017_review",
+    patientId: "pt_0017",
+    title: "Two-month tuberculosis review",
+    source: "Tuberculosis clinic",
+    daysAgo: 2,
+    hour: 11,
+    text: `Two months of treatment completed. Weight up from 48.0 kg to 52.0 kg. Sputum now negative for tuberculosis. ALT 41 U/L, a mild rise from a baseline of 28, with no jaundice or vomiting — continue treatment with monthly liver monitoring.
+HbA1c improved to 8.4%, so the diabetes is helping rather than hindering recovery. Discussed continuing treatment to complete six months and the importance of not stopping early.
+Report straight away: yellow eyes or skin, dark urine, vomiting, a rash or worsening breathlessness.`,
+  },
+  {
+    id: "rec_seed_pt_0018_plan",
+    patientId: "pt_0018",
+    title: "Medical oncology plan — adjuvant chemotherapy",
+    source: "Oncology",
+    daysAgo: 40,
+    hour: 9,
+    text: `Breast cancer treated with surgery; now receiving adjuvant chemotherapy with epirubicin and cyclophosphamide every twenty-one days for six cycles. Currently on cycle 3.
+Because chemotherapy lowers the white-cell count she is at risk of serious infection. Temperature should be checked twice daily, and a temperature of 38 °C or above, or feeling suddenly unwell, is an emergency — call straight away.
+Anti-sickness medicine ondansetron 8 mg twice daily as needed. A filgrastim injection is given for five days after each cycle to help the white cells recover.
+After chemotherapy, endocrine therapy (tamoxifen) will be discussed, with advice to report leg swelling, calf pain or unusual vaginal bleeding.`,
+  },
+  {
+    id: "rec_seed_pt_0018_neutropenia",
+    patientId: "pt_0018",
+    title: "Day-10 post-chemotherapy telephone assessment",
+    source: "Oncology day unit",
+    daysAgo: 2,
+    hour: 14,
+    text: `Day 10 after cycle 3 — the point in the cycle when the white-cell count is lowest. White cell count 1.1 ×109/L and absolute neutrophil count 0.6 ×109/L (neutropenia). Haemoglobin 102 g/L.
+Reports tiredness and a mild sore throat but no fever and no shivering. Temperature 37.2 °C.
+Advice: check the temperature every four hours, avoid crowded places and people with infections, and treat a temperature of 38 °C or above, shivering, or feeling very unwell as an emergency needing immediate assessment.
+Filgrastim course completed. Return to the day unit if any fever develops.`,
+  },
+  {
+    id: "rec_seed_pt_0019_neuro",
+    patientId: "pt_0019",
+    title: "Neurology review — Parkinson's disease",
+    source: "Neurology",
+    daysAgo: 20,
+    hour: 10,
+    text: `Parkinson's disease with wearing-off: stiffness and slowness return before the next levodopa dose. Levodopa/carbidopa 100/25 mg is taken four times a day at 07:00, 11:00, 15:00 and 19:00 — the doses must be given on time and never delayed.
+Amantadine 100 mg twice daily was added to smooth the response. Rasagiline 1 mg daily continued.
+Metoclopramide and some other anti-sickness medicines must be avoided because they can worsen Parkinson's movements; domperidone is the preferred choice if an anti-sickness medicine is needed.
+Discussed falls prevention and the importance of not stopping medicines suddenly.`,
+  },
+  {
+    id: "rec_seed_pt_0019_swallow",
+    patientId: "pt_0019",
+    title: "Swallowing and falls assessment",
+    source: "Therapy team",
+    daysAgo: 3,
+    hour: 13,
+    text: `Swallow assessment showed a mildly delayed swallow with no aspiration, but meals take a long time. Recommended a soft, moist diet, sitting upright at ninety degrees, small mouthfuls and no talking while eating. Stop if coughing or a wet voice develops.
+Blood pressure lying 138/82 mmHg, standing 106/66 mmHg — a drop on standing that explains the dizziness and the two near-falls at night.
+Weight has fallen from 62.0 kg to 59.5 kg, likely from difficulty eating. Plan: dietician referral, a night light beside the bed, and to sit on the edge of the bed for a minute before standing.
+The call bell will be kept within reach.`,
+  },
+  {
+    id: "rec_seed_pt_0020_antenatal",
+    patientId: "pt_0020",
+    title: "Antenatal clinic note — gestational diabetes",
+    source: "Antenatal clinic",
+    daysAgo: 14,
+    hour: 11,
+    text: `Thirty weeks pregnant, first pregnancy. Glucose readings were above target on diet alone, so insulin was started: insulin aspart with meals adjusted by carbohydrate intake, and insulin detemir 10 units at bedtime.
+Aspirin 75 mg once daily continues to reduce the risk of pre-eclampsia and was started after twelve weeks. Folic acid 5 mg and iron tablets continued.
+Discussed the diabetes diet, regular meals, hand hygiene before injections and how to recognise and treat a low blood sugar. Blood pressure and urine protein to be checked at every visit.
+Red flags to report immediately: severe headache, blurred vision, upper abdominal pain, swelling of the face or hands, or reduced baby movements.`,
+  },
+  {
+    id: "rec_seed_pt_0020_glucose",
+    patientId: "pt_0020",
+    title: "Home glucose and blood-pressure log",
+    source: "Patient-reported",
+    daysAgo: 1,
+    hour: 20,
+    text: `Fasting glucose 4.8 mmol/L and glucose after breakfast 8.6 mmol/L — within the pregnancy targets. No low-sugar episodes.
+Blood pressure 124/78 mmHg and urine protein negative at the last visit.
+Baby moving normally every day. Weight 68.0 kg. No headache, no visual changes and no swelling of the hands or face.
+Continuing insulin with meals and at bedtime, the diabetes diet, aspirin and iron. Asked about the plan for delivery and when to come to hospital.`,
+  },
+  {
+    id: "rec_seed_pt_0021_wheeze",
+    patientId: "pt_0021",
+    title: "Paediatric assessment — wheeze and asthma action plan",
+    source: "Paediatric clinic",
+    daysAgo: 5,
+    hour: 15,
+    text: `Four-year-old with a wheezy episode after a cold. Oxygen saturation 94% on air, breathing rate 28 per minute and mild chest recession. Given salbutamol through a spacer with a good response, and a three-day course of prednisolone 20 mg once daily.
+Diagnosis: childhood asthma with a viral trigger. Started a preventer inhaler (beclometasone 50 μg two puffs twice daily) and a reliever (salbutamol) to use with a spacer.
+Also a known peanut allergy: the adrenaline auto-injector 0.15 mg must be available and used for any severe reaction with breathing difficulty or facial swelling.
+Written action plan given. Dial 112 for breathing difficulty at rest, blue lips, drowsiness or a severe allergic reaction.`,
+  },
+  {
+    id: "rec_seed_pt_0021_followup",
+    patientId: "pt_0021",
+    title: "Telephone follow-up — day 5 of steroids",
+    source: "Paediatric follow-up",
+    daysAgo: 1,
+    hour: 16,
+    text: `Wheeze improving. Oxygen saturation 97% on air, breathing rate 22 per minute and no chest recession. Sleeping through the night without coughing.
+The prednisolone course is nearly finished; continue the preventer inhaler twice daily and use the spacer. The reliever was used twice in the last two days.
+Parents are confident using the spacer and the action plan, and know to give the adrenaline auto-injector and call 112 for a severe allergic reaction.
+Review in the paediatric clinic in four weeks if symptoms settle.`,
+  },
+  {
+    id: "rec_seed_pt_0022_anaemia",
+    patientId: "pt_0022",
+    title: "Discharge summary — severe iron deficiency anaemia",
+    source: "Hospital discharge",
+    daysAgo: 10,
+    hour: 12,
+    text: `Admitted with breathlessness, tiredness and a fast heart rate. Haemoglobin 62 g/L, ferritin 4 ng/mL and a raised platelet count of 420 ×109/L — severe iron deficiency anaemia. Heavy periods and uterine fibroids are the likely source of the blood loss.
+Given a single intravenous dose of ferric carboxymaltose 1000 mg, started on ferrous sulfate tablets and folic acid, and tranexamic acid 500 mg to take during heavy days of the period.
+Advice: report breathlessness at rest, chest pain, palpitations or heavy bleeding. Repeat the blood count after treatment and attend the gynaecology clinic for the heavy periods.
+A blood transfusion was not required as she stayed stable.`,
+  },
+  {
+    id: "rec_seed_pt_0022_review",
+    patientId: "pt_0022",
+    title: "Follow-up note after intravenous iron",
+    source: "Clinic",
+    daysAgo: 1,
+    hour: 10,
+    text: `Feeling much better with far less breathlessness. Haemoglobin has risen from 62 g/L to 95 g/L and ferritin from 4 to 120 ng/mL after the intravenous iron. Heart rate now 82 bpm.
+Continuing ferrous sulfate tablets, folic acid, and tranexamic acid during heavy days. No black stools and no heavy bleeding reported this cycle.
+A gynaecology referral was sent to assess the fibroids and heavy periods, which are the underlying cause. Repeat the blood count in four weeks and report any return of breathlessness, chest pain or palpitations.`,
   },
 ];
 
