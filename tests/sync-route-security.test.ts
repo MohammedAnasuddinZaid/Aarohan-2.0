@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
-import { POST as syncPost } from "@/app/api/sync/route";
+import { GET as syncGet, POST as syncPost } from "@/app/api/sync/route";
+import { GET as streamGet } from "@/app/api/stream/route";
 import {
   registerPairTokenPersistent,
   resetPairingForTests,
@@ -16,6 +17,10 @@ function post(body: unknown) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+function get(path: string) {
+  return new NextRequest(`https://care.example.com${path}`, { method: "GET" });
 }
 
 function gesture() {
@@ -79,6 +84,32 @@ describe("POST /api/sync — alert-lifecycle mutations are proof-gated", () => {
 
   it("leaves the device telemetry plane open for an unregistered demo bed", async () => {
     const res = await syncPost(post(gesture()));
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("GET read plane — strict mode requires proof", () => {
+  it("refuses an anonymous read of an unregistered bed in strict mode", async () => {
+    process.env.CARE_SECURITY_MODE = "strict";
+    const res = await syncGet(get(`/api/sync?session=${SESSION}&since=0`));
+    expect(res.status).toBe(401);
+  });
+
+  it("keeps the unregistered demo read open", async () => {
+    const res = await syncGet(get(`/api/sync?session=${SESSION}&since=0`));
+    expect(res.status).toBe(200);
+  });
+
+  it("refuses a registered bed's live stream without the pair, when strict", async () => {
+    process.env.CARE_SECURITY_MODE = "strict";
+    await registerPairTokenPersistent(SESSION, "owner-token-1234");
+    const res = await streamGet(get(`/api/stream?session=${SESSION}`));
+    expect(res.status).toBe(401);
+  });
+
+  it("keeps a registered bed readable in demo once the pair is proven", async () => {
+    await registerPairTokenPersistent(SESSION, "owner-token-1234");
+    const res = await syncGet(get(`/api/sync?session=${SESSION}&since=0&pair=owner-token-1234`));
     expect(res.status).toBe(200);
   });
 });

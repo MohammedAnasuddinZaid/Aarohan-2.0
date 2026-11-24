@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getSessionStore } from "@/lib/server/store";
 import { authorizeSyncSession } from "@/lib/care/sessionAccess";
+import { isStrictSecurity } from "@/lib/care/securityMode";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -31,7 +32,12 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
   const session = rawSession.toUpperCase();
 
-  const access = await authorizeSyncSession(request, session, searchParams.get("pair"));
+  // Strict mode is for real patient data: the read plane (live events, vitals
+  // and metrics) requires proof of pairing too, not just a guessable session id.
+  // The unregistered demo console stays open so the hackathon flow works.
+  const access = await authorizeSyncSession(request, session, searchParams.get("pair"), {
+    requireProof: isStrictSecurity(),
+  });
   if (!access.allowed) {
     return new Response("Scan the patient's QR code to read this session.", { status: 401 });
   }

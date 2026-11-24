@@ -62,8 +62,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const session = rawSession.toUpperCase();
 
   // A registered bed's QR token is required to read its live data. Unpaired
-  // demo consoles keep working so emergency/CCTV routes are not broken.
-  const access = await authorizeSyncSession(request, session, searchParams.get("pair"));
+  // demo consoles keep working so emergency/CCTV routes are not broken; in
+  // strict mode (real patient data) even an unregistered bed's live stream
+  // requires proof, not just a guessable session id.
+  const access = await authorizeSyncSession(request, session, searchParams.get("pair"), {
+    requireProof: isStrictSecurity(),
+  });
   if (!access.allowed) return bad("Scan the patient's QR code to read this session.", 401);
 
   const since = Number(searchParams.get("since") ?? "0");
