@@ -5,10 +5,13 @@ import {
   askPortal,
   buildPortalContext,
   buildSbar,
+  chartSignature,
+  findingsSignature,
   linkPortalSession,
   metricsBucket,
   rulesAlertLine,
   severityRank,
+  vitalsBucket,
   worstSeverity,
 } from "@/lib/care/portalBrain";
 import {
@@ -282,5 +285,72 @@ describe("portal context + answering", () => {
     });
     expect(res.patientId).toBe("pt_0001");
     expect(res.answer.length).toBeGreaterThan(0);
+  });
+});
+
+describe("cache correctness under changing readings", () => {
+  const VITALS = { deviceId: "wearable-1", receivedAt: 0 };
+
+  it("findings signature distinguishes the same key at a worse reading", () => {
+    const watch = analyzeSignals(null, { ...VITALS, spo2: 93 });
+    const worse = analyzeSignals(null, { ...VITALS, spo2: 91 });
+    expect(watch.map((f) => f.key)).toEqual(worse.map((f) => f.key)); // same key
+    expect(findingsSignature(watch)).not.toBe(findingsSignature(worse)); // different signature
+    expect(findingsSignature(watch)).toContain("93%");
+    expect(findingsSignature(worse)).toContain("91%");
+  });
+
+  it("vitals bucket separates a meaningfully different saturation", () => {
+    expect(vitalsBucket({ ...VITALS, spo2: 93 })).not.toBe(vitalsBucket({ ...VITALS, spo2: 91 }));
+    expect(vitalsBucket(null)).toBe("none");
+    // small jitter that does not change the integer reading stays stable
+    expect(vitalsBucket({ ...VITALS, spo2: 93.1 })).toBe(vitalsBucket({ ...VITALS, spo2: 93.4 }));
+  });
+
+  it("chart signature changes when the chart changes", () => {
+    const patient = getSeedPatient("pt_0001")!;
+    const base = chartSignature(patient, []);
+    const addedMed = {
+      ...patient,
+      medications: [...patient.medications, { id: "m_new", name: "Aspirin", status: "active" as const }],
+    };
+    expect(chartSignature(addedMed, [])).not.toBe(base);
+    expect(chartSignature(patient, [])).toBe(base); // stable for an unchanged chart
+  });
+
+  it("never reuses an answer after a device vital has fallen", async () => {
+    await linkSessionToPatient("SPO201", "pt_0001");
+    const store = await getSessionStore();
+    const q = "What are her readings right now?";
+
+    await store.setVitals("SPO201", { ...VITALS, spo2: 93, receivedAt: Date.now() });
+    const first = await askPortal("SPO201", q);
+    expect(first.cached).toBe(false);
+    expect(first.answer).toContain("93");
+
+    const again = await askPortal("SPO201", q);
+    expect(again.cached).toBe(true); // identical signal state may reuse the cache
+    expect(again.answer).toBe(first.answer);
+
+    // The saturation drops. The nurse must get a NEW answer for the new value,
+    // never the reassuring sentence cached a moment earlier.
+    await store.setVitals("SPO201", { ...VITALS, spo2: 91, receivedAt: Date.now() });
+    const afterDrop = await askPortal("SPO201", q);
+    expect(afterDrop.cached).toBe(false);
+    expect(afterDrop.answer).toContain("91");
+    expect(afterDrop.answer).not.toBe(first.answer);
+  });
+
+  it("does not cache while a reading is critical", async () => {
+    await linkSessionToPatient("CRIT01", "pt_0001");
+    const store = await getSessionStore();
+    await store.setMetrics("CRIT01", "cam1", { alertnessScore: 10, blinkRate: 3, movementActivity: 0.01 });
+
+    const q = "Summarise her medications.";
+    const first = await askPortal("CRIT01", q);
+    const second = await askPortal("CRIT01", q);
+    expect(first.cached).toBe(false);
+    // Critical state is recomputed every time; the cache is bypassed both ways.
+    expect(second.cached).toBe(false);
   });
 });

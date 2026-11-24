@@ -228,16 +228,88 @@ export function metricsBucket(m: PatientMetrics | null | undefined): string {
   ].join("/");
 }
 
+/**
+ * Coarse device-vitals bucket.
+ *
+ * Device vitals were previously absent from EVERY answer/brief/alerts cache key,
+ * so a saturation falling 94% -> 91% or a heart rate climbing 80 -> 130 produced
+ * the identical key and the assistant kept serving the older, calmer answer for
+ * a patient who had deteriorated. SpO2 is bucketed at 1 point on purpose: it is
+ * the sharpest deterioration signal and a whole-percent move is real, not jitter.
+ */
+export function vitalsBucket(v: DeviceVitals | null | undefined): string {
+  if (!v) return "none";
+  const r = (n: number | undefined, step: number) =>
+    n == null || !Number.isFinite(n) ? "-" : String(Math.round(n / step) * step);
+  return [r(v.spo2, 1), r(v.heartRate, 5), r(v.temperature, 0.5), v.sosActive ? "sos" : "-"].join("/");
+}
+
+/**
+ * Signature of the abnormal findings a cached answer depends on.
+ *
+ * The old key used `findings.map(f => f.key)` — the key alone. `spo2` at 93%
+ * and `spo2` at 89% therefore collided and reused the same answer, which is the
+ * exact failure a nurse must never see: a reading has worsened but the sentence
+ * still says the old value. Severity and reading are now part of the signature.
+ */
+export function findingsSignature(findings: SignalFinding[]): string {
+  return findings
+    .map((f) => {
+      if (f.key === "signal_stale") {
+        // A stale-device finding's "reading" is a live duration that ticks up
+        // every minute; bucket it so the key does not churn on every tick while
+        // still refreshing once the gap materially grows.
+        const seconds = staleSeconds(f.reading);
+        const minutes = seconds != null && seconds > 0 ? Math.max(1, Math.round(seconds / 60)) : 0;
+        return `${f.key}:${f.severity}:${minutes}m`;
+      }
+      return `${f.key}:${f.severity}:${f.reading}`;
+    })
+    .join("|");
+}
+
+/**
+ * Content hash of the chart that is NOT on the patient row and NOT in
+ * `extrasSignature`: conditions, medications, allergies, observations and the
+ * care plan. Without this, a corrected medication or a new observation reused an
+ * answer generated from the previous chart. Inserted records are append-only
+ * (new `id`, immutable text), so `id:createdAt:chars` identifies them exactly
+ * without hashing up to 40 kB of text each request.
+ */
+export function chartSignature(patient: ClinicalPatient, records: PatientRecord[]): string {
+  const parts: string[] = [
+    `plan:${patient.carePlan ?? ""}`,
+    ...patient.conditions.map(
+      (c) => `c:${c.id}:${c.name}:${c.status}:${c.since ?? ""}:${c.note ?? ""}:${c.code ?? ""}`
+    ),
+    ...patient.medications.map(
+      (m) => `m:${m.id}:${m.name}:${m.dose ?? ""}:${m.route ?? ""}:${m.frequency ?? ""}:${m.status}:${m.since ?? ""}:${m.note ?? ""}`
+    ),
+    ...patient.allergies.map((a) => `a:${a.id}:${a.substance}:${a.reaction ?? ""}:${a.severity}`),
+    ...patient.observations.map((o) => `o:${o.id}:${o.label}:${String(o.value)}:${o.unit ?? ""}:${o.at}:${o.provenance}`),
+    ...records.map((r) => `r:${r.id}:${r.createdAt}:${r.chars}:${r.title}:${r.source ?? ""}`),
+  ];
+  return createHash("sha256").update(parts.join("\u0001")).digest("hex").slice(0, 16);
+}
+
 // ---------------------------------------------------------------------------
 // cache
 // ---------------------------------------------------------------------------
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * A much shorter life when anything has crossed a threshold. A quiet chart can
+ * be answered from an hour-old cache; a chart with an active abnormal reading
+ * cannot, because the nurse may be asking about a value that has since moved.
+ */
+const CACHE_TTL_ACTIVE_MS = 15 * 60 * 1000;
 
 interface CachedAnswer {
   text: string;
   model: string;
   at: string;
+  /** Per-entry TTL. Absent means CACHE_TTL_MS (older entries / quiet charts). */
+  ttlMs?: number;
   intent?: string;
   scope?: QuestionScope;
   grounded?: boolean;
@@ -260,7 +332,8 @@ async function cacheGet(key: string): Promise<CachedAnswer | null> {
     const d = await getDriver();
     const hit = (await d.getDoc(K.aiCache(key))) as CachedAnswer | null;
     if (!hit) return null;
-    if (Date.now() - Date.parse(hit.at) > CACHE_TTL_MS) return null;
+    const ttl = hit.ttlMs ?? CACHE_TTL_MS;
+    if (Date.now() - Date.parse(hit.at) > ttl) return null;
     return hit;
   } catch {
     return null;
@@ -271,11 +344,12 @@ async function cachePut(
   key: string,
   text: string,
   model: string,
-  meta: Pick<CachedAnswer, "intent" | "scope" | "grounded" | "citations"> = {}
+  meta: Pick<CachedAnswer, "intent" | "scope" | "grounded" | "citations"> = {},
+  ttlMs?: number
 ): Promise<void> {
   try {
     const d = await getDriver();
-    const value: CachedAnswer = { text, model, at: new Date().toISOString(), ...meta };
+    const value: CachedAnswer = { text, model, at: new Date().toISOString(), ttlMs, ...meta };
     await d.setDoc(K.aiCache(key), value);
     await d.appendList(K.aiCacheIndex, key, 500);
   } catch {
@@ -1254,31 +1328,50 @@ export async function askPortal(
   ]);
 
   const key = cacheKey([
-    "answer:v2",
+    "answer:v3",
     patient.id,
     detail,
+    opts.voice ? "voice" : "text",
     question.toLowerCase(),
     history.length ? historySignature(history) : "",
+    chartSignature(patient, records),
     records.map((r) => `${r.id}:${r.chars}`).join(","),
     extrasSignature(extras),
     metricsBucket(ctx.metrics),
-    ctx.findings.map((f) => f.key).join(","),
+    vitalsBucket(ctx.vitals),
+    findingsSignature(ctx.findings),
+    geminiModelLabel(opts.voice ? "fast" : detail === "deep" ? "deep" : "fast"),
   ]);
 
-  const cached = await cacheGet(key);
-  if (cached) {
-    return {
-      answer: cached.text,
-      engine: cached.model === "rules" ? "rules" : "gemini",
-      model: cached.model,
-      cached: true,
-      intent: cached.intent,
-      scope: cached.scope,
-      grounded: cached.grounded,
-      citations: cached.citations,
-      followUps,
-      patientId: patient.id,
-    };
+  // A critical reading must never be answered from cache: the nurse is looking
+  // at a patient who is deteriorating and the sentence must reflect the value
+  // in front of them, not one written before it fell. Read AND write are both
+  // skipped so the stale, calmer answer can neither be served nor reinforced.
+  // (Emergency-scope turns already returned before this point.)
+  const cacheable = ctx.worst !== "critical";
+  const ttl = ctx.findings.length ? CACHE_TTL_ACTIVE_MS : CACHE_TTL_MS;
+  const putAnswer = (
+    text: string,
+    model: string,
+    meta: Pick<CachedAnswer, "intent" | "scope" | "grounded" | "citations"> = {}
+  ) => (cacheable ? cachePut(key, text, model, meta, ttl) : Promise.resolve());
+
+  if (cacheable) {
+    const cached = await cacheGet(key);
+    if (cached) {
+      return {
+        answer: cached.text,
+        engine: cached.model === "rules" ? "rules" : "gemini",
+        model: cached.model,
+        cached: true,
+        intent: cached.intent,
+        scope: cached.scope,
+        grounded: cached.grounded,
+        citations: cached.citations,
+        followUps,
+        patientId: patient.id,
+      };
+    }
   }
 
   // 0. Deterministic, question-shaped lookups: live readings, closest to
@@ -1304,7 +1397,7 @@ export async function askPortal(
         grounded: quick.grounded,
         citations: quick.citations,
       };
-      await cachePut(key, quick.text, "rules", meta);
+      await putAnswer(quick.text, "rules", meta);
       return finish(quick.text, "rules", "rules", false, meta);
     }
   }
@@ -1315,7 +1408,7 @@ export async function askPortal(
   if (exact) {
     const scope: QuestionScope = route.scope === "mixed" ? "record" : route.scope;
     const meta = { intent: exact.intent, scope, grounded: true };
-    await cachePut(key, exact.text, "rules", meta);
+    await putAnswer(exact.text, "rules", meta);
     return finish(exact.text, "rules", "rules", false, meta);
   }
 
@@ -1399,7 +1492,7 @@ export async function askPortal(
         grounded: route.scope !== "general" && recordHits.passages.length > 0,
         citations,
       };
-      await cachePut(key, result.text, result.model, meta);
+      await putAnswer(result.text, result.model, meta);
       return finish(result.text, "gemini", result.model, false, meta);
     }
   }
@@ -1408,7 +1501,7 @@ export async function askPortal(
   if (historyQ) {
     const answer = historySummary(patient, records, detail === "deep");
     const meta = { intent: "history", scope: "record" as QuestionScope, grounded: true };
-    await cachePut(key, answer, "rules", meta);
+    await putAnswer(answer, "rules", meta);
     return finish(answer, "rules", "rules", false, meta);
   }
 
@@ -1417,14 +1510,14 @@ export async function askPortal(
       generalFallback(generalHits.passages) ??
       `${unknownAnswer(patient)} I treated that as a general question, so I did not use the chart.`;
     const meta = { intent: "general", scope: "general" as QuestionScope, grounded: false, citations };
-    await cachePut(key, answer, "rules", meta);
+    await putAnswer(answer, "rules", meta);
     return finish(answer, "rules", "rules", false, meta);
   }
 
   if (route.scope === "mixed" && !recordHits.passages.length && generalHits.passages.length) {
     const answer = `${generalFallback(generalHits.passages)} I could not find a patient-specific note for this in ${patient.displayName}'s chart.`;
     const meta = { intent: "general", scope: "mixed" as QuestionScope, grounded: false, citations };
-    await cachePut(key, answer, "rules", meta);
+    await putAnswer(answer, "rules", meta);
     return finish(answer, "rules", "rules", false, meta);
   }
 
@@ -1432,7 +1525,7 @@ export async function askPortal(
   if (/listen|hear|voice|audio|speak|talk|can you/.test(q)) {
     const answer = `Yes. I can answer questions about ${patient.displayName}, report the live readings, and speak my replies through your browser when voice is enabled. ${ctx.findings.length ? `Right now ${ctx.findings.map((f) => `${f.label} ${f.reading}`).join(", ")}.` : "All monitored readings are inside their thresholds right now."}`;
     const meta = { scope: "meta" as QuestionScope, grounded: false };
-    await cachePut(key, answer, "rules", meta);
+    await putAnswer(answer, "rules", meta);
     return finish(answer, "rules", "rules", false, meta);
   }
 
@@ -1446,7 +1539,7 @@ export async function askPortal(
     grounded: recordHits.strong,
     citations: recordHits.strong ? citations : [],
   };
-  await cachePut(key, answer, "rules", meta);
+  await putAnswer(answer, "rules", meta);
   return finish(answer, "rules", "rules", false, meta);
 }
 
@@ -1538,20 +1631,16 @@ export async function alertPortal(
   }
 
   const key = cacheKey([
-    "alert",
+    "alert:v2",
     ctx.patientId,
-    ctx.findings
-      .map((f) => {
-        if (f.key === "signal_stale") {
-          const seconds = staleSeconds(f.reading);
-          const minutes = seconds != null && seconds > 0 ? Math.max(1, Math.round(seconds / 60)) : 0;
-          return `${f.key}:${minutes}m`;
-        }
-        return `${f.key}:${f.reading}`;
-      })
-      .join("|"),
+    findingsSignature(ctx.findings),
     metricsBucket(ctx.metrics),
+    vitalsBucket(ctx.vitals),
   ]);
+  // An alert only exists while something is abnormal, so it always uses the
+  // short TTL. The key already carries the exact reading, so a changed value is
+  // a cache miss rather than a stale alert.
+  const ttl = CACHE_TTL_ACTIVE_MS;
 
   if (!opts.force) {
     const hit = await cacheGet(key);
@@ -1568,13 +1657,13 @@ export async function alertPortal(
     ].join("\n\n");
     const result = await geminiGenerate({ system: ALERT_SYSTEM, prompt, maxTokens: 140, temperature: 0.2 });
     if (result) {
-      await cachePut(key, result.text, result.model);
+      await cachePut(key, result.text, result.model, {}, ttl);
       return { line: result.text, severity: ctx.worst, engine: "gemini", model: result.model, cached: false, findings: ctx.findings };
     }
   }
 
   const line = rulesAlertLine(ctx.patient, ctx.findings);
-  await cachePut(key, line, "rules");
+  await cachePut(key, line, "rules", {}, ttl);
   return { line, severity: ctx.worst, engine: "rules", model: "rules", cached: false, findings: ctx.findings };
 }
 
@@ -1613,7 +1702,16 @@ export async function portalBriefing(sessionId: string): Promise<{ line: string;
 
   if (!geminiConfigured()) return { line: base, engine: "rules", model: "rules" };
 
-  const key = cacheKey(["brief", ctx.patientId, metricsBucket(ctx.metrics), ctx.findings.map((f) => f.key).join(",")]);
+  const key = cacheKey([
+    "brief:v2",
+    ctx.patientId,
+    chartSignature(ctx.patient, await listRecords(ctx.patient.id).catch(() => [])),
+    metricsBucket(ctx.metrics),
+    vitalsBucket(ctx.vitals),
+    findingsSignature(ctx.findings),
+    geminiModelLabel(),
+  ]);
+  const ttl = ctx.findings.length ? CACHE_TTL_ACTIVE_MS : CACHE_TTL_MS;
   const hit = await cacheGet(key);
   if (hit) return { line: hit.text, engine: "gemini", model: hit.model };
 
@@ -1624,7 +1722,7 @@ export async function portalBriefing(sessionId: string): Promise<{ line: string;
   ].join("\n\n");
   const result = await geminiGenerate({ system: ANSWER_SYSTEM, prompt, maxTokens: 200, temperature: 0.2 });
   if (result) {
-    await cachePut(key, result.text, result.model);
+    await cachePut(key, result.text, result.model, {}, ttl);
     return { line: result.text, engine: "gemini", model: result.model };
   }
   return { line: base, engine: "rules", model: "rules" };
