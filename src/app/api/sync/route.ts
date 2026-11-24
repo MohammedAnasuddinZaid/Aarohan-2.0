@@ -2,11 +2,25 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionStore } from "@/lib/server/store";
 import { sanitizeVitals, clampFinite } from "@/lib/server/vitals";
 import { authorizeSyncSession } from "@/lib/care/sessionAccess";
+import { isStrictSecurity } from "@/lib/care/securityMode";
 import { AlertAction, DeviceVitals, GestureLogEntry, NurseReply, PatientMetrics } from "@/types";
 
 export const dynamic = "force-dynamic";
 
 const GESTURES = new Set(["YES", "NO", "HELP", "WATER", "HELLO", "EMERGENCY", "SYSTEM"]);
+
+/**
+ * Alert-lifecycle mutations (acknowledge / escalate / resolve) are the one write
+ * type that can silence a real emergency. On a registered bed they already need
+ * a valid pair; on a strict/hosted deployment or whenever a real messaging
+ * provider is configured they must also prove identity even for a bed that has
+ * not registered yet — otherwise a bare session id could resolve an emergency
+ * out of existence. The keyless, unregistered hackathon demo stays open so the
+ * ward -> nurse-view flow (which carries no login) keeps working.
+ */
+function privilegedMutation(type: string | undefined): boolean {
+  return type === "acknowledge" || type === "escalate" || type === "resolve";
+}
 
 function bad(error: string, status = 400) {
   return NextResponse.json({ ok: false, error }, { status });
@@ -86,7 +100,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (body.sessionId !== undefined && !normalizeSession(body.sessionId)) return bad("Invalid session");
   const session = body.sessionId?.toUpperCase() ?? "default";
 
-  const access = await authorizeSyncSession(request, session, body.pair);
+  const access = await authorizeSyncSession(request, session, body.pair, {
+    requireProof: privilegedMutation(body.type) && (isStrictSecurity() || Boolean(process.env.MSG91_AUTH_KEY)),
+  });
   if (!access.allowed) return bad("Scan the patient's QR code to write this session.", 401);
 
   const store = await getSessionStore();
