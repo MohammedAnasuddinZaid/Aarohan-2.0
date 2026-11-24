@@ -279,6 +279,7 @@ export function findingsSignature(findings: SignalFinding[]): string {
 export function chartSignature(patient: ClinicalPatient, records: PatientRecord[]): string {
   const parts: string[] = [
     `plan:${patient.carePlan ?? ""}`,
+    `profile:${patient.id}:${patient.displayName}:${patient.age ?? ""}:${patient.sex ?? ""}:${patient.room ?? ""}:${patient.primaryConcern ?? ""}:${patient.language}:${patient.extension}:${patient.synthetic ? "syn" : "real"}`,
     ...patient.conditions.map(
       (c) => `c:${c.id}:${c.name}:${c.status}:${c.since ?? ""}:${c.note ?? ""}:${c.code ?? ""}`
     ),
@@ -287,6 +288,7 @@ export function chartSignature(patient: ClinicalPatient, records: PatientRecord[
     ),
     ...patient.allergies.map((a) => `a:${a.id}:${a.substance}:${a.reaction ?? ""}:${a.severity}`),
     ...patient.observations.map((o) => `o:${o.id}:${o.label}:${String(o.value)}:${o.unit ?? ""}:${o.at}:${o.provenance}`),
+    ...patient.encounters.map((e) => `e:${e.id}:${e.at}:${e.kind}:${e.summary}:${e.by ?? ""}`),
     ...records.map((r) => `r:${r.id}:${r.createdAt}:${r.chars}:${r.title}:${r.source ?? ""}`),
   ];
   return createHash("sha256").update(parts.join("\u0001")).digest("hex").slice(0, 16);
@@ -1082,7 +1084,10 @@ async function loadKnowledgeExtras(patientId: string): Promise<PatientExtras> {
 function extrasSignature(extras: PatientExtras): string {
   return [
     ...(extras.sessions ?? []).map((s) => `${s.id}:${s.status}:${s.escalated ? 1 : 0}`),
-    ...(extras.transcripts ?? []).map((t) => `${t.sessionId}:${t.entries.length}`),
+    ...(extras.transcripts ?? []).map((t) => {
+      const text = (t.entries ?? []).map((e) => `${e.role}:${e.text}`).join("\n");
+      return `${t.sessionId}:${t.entries.length}:${createHash("sha256").update(text).digest("hex").slice(0, 12)}`;
+    }),
     ...(extras.reports ?? []).map((r) => `${r.id}:${r.status}`),
     ...(extras.tasks ?? []).map((t) => `${t.id}:${t.status}`),
     ...(extras.messages ?? []).map((m) => m.id),
