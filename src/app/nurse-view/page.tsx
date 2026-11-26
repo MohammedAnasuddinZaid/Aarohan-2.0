@@ -41,6 +41,7 @@ import {
   dailyGestureCounts,
 } from "@/lib/analytics";
 import PatientMetricsCard from "@/components/PatientMetricsCard";
+import Esp32VitalsCard from "@/components/Esp32VitalsCard";
 import PortalAssistant from "@/components/care/PortalAssistant";
 import ClinicianActions from "@/components/ClinicianActions";
 import {
@@ -744,6 +745,8 @@ export default function NurseViewPage() {
 
           {/* ── right: wellness, replies, actions ── */}
           <div className="space-y-6">
+            <Esp32VitalsCard vitals={primaryVitals} deviceName="ESP32 Wearable" />
+
             <PatientMetricsCard metrics={primaryMetrics} log={log} vitals={primaryVitals} deviceName="Paired Device" />
 
             {/* predictive deterioration trajectory */}
