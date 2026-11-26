@@ -11,6 +11,7 @@
  */
 import type { NextRequest } from "next/server";
 import { nurseFromRequest } from "./auth";
+import { isStrictSecurity } from "./securityMode";
 import {
   hasRegistrationPersistent,
   verifyPairTokenPersistent,
@@ -87,6 +88,10 @@ export async function authorizeSyncSession(
   }
   if (!registered && !options.requireProof) return { allowed: true };
   if (!registered) return authorizeSession(req, key, pair ?? null);
+
+  // Demo mode: allow access without a pair token for hackathon demonstration.
+  // In strict mode, a registered bed requires proof (pair token or nurse login).
+  if (!isStrictSecurity() && !pair) return { allowed: true };
 
   if (!pair) return authorizeSession(req, key, null);
 
