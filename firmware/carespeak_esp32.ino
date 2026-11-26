@@ -52,6 +52,7 @@ static const WifiCred WIFI_CREDS[] = {
   { "Anas", "osssa1920" },
   { "Anas 5G", "osssa1920" },
   { "Mohdanasuddinzaid's A15", "ossa1920" },
+  { "M0hdanasuddinzaid's A15", "ossa1920" },
   // Add your demo hotspot below:
   // { "YourHotspotName", "YourHotspotPassword" },
 };
