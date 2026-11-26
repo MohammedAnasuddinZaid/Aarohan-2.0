@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CareSpeak ESP32 Vitals Dashboard</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --card2: #334155;
+    --accent: #38bdf8;
+    --green: #22c55e;
+    --red: #ef4444;
+    --orange: #f59e0b;
+    --text: #f1f5f9;
+    --muted: #94a3b8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 20px;
+  }
+  .container { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin-bottom: 4px; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px; }
+  .card {
+    background: var(--card);
+    border-radius: 12px;
+    padding: 20px;
+    border: 1px solid #334155;
+  }
+  .card-label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  .card-value { font-size: 2.5rem; font-weight: 700; line-height: 1; }
+  .card-unit { color: var(--muted); font-size: 0.8rem; margin-top: 4px; }
+  .hr { color: #f87171; }
+  .spo2 { color: #38bdf8; }
+  .battery { color: #22c55e; }
+  .rssi { color: #a78bfa; }
+  .status-bar {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--card); border-radius: 12px; padding: 12px 20px;
+    margin-bottom: 20px; border: 1px solid #334155;
+  }
+  .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .dot.green { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.red { background: var(--red); box-shadow: 0 0 8px var(--red); }
+  .dot.orange { background: var(--orange); box-shadow: 0 0 8px var(--orange); }
+  .sos-alert {
+    background: #7f1d1d; border: 2px solid var(--red); border-radius: 12px;
+    padding: 16px 20px; margin-bottom: 20px; display: none;
+    animation: pulse 1s infinite;
+  }
+  .sos-alert.show { display: block; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.7; } }
+  .sos-title { font-size: 1.2rem; font-weight: 700; color: #fca5a5; }
+  .sos-time { color: #fecaca; font-size: 0.85rem; margin-top: 4px; }
+  .controls { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+  .controls input {
+    flex: 1; min-width: 200px; padding: 10px 14px; border-radius: 8px;
+    border: 1px solid #334155; background: var(--card2); color: var(--text);
+    font-size: 0.9rem;
+  }
+  .controls button {
+    padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer;
+    background: var(--accent); color: #0f172a; font-weight: 600; font-size: 0.9rem;
+  }
+  .controls button:hover { opacity: 0.9; }
+  .log {
+    background: var(--card); border-radius: 12px; padding: 16px;
+    border: 1px solid #334155; max-height: 300px; overflow-y: auto;
+    font-family: 'Consolas', 'Courier New', monospace; font-size: 0.8rem;
+  }
+  .log-entry { padding: 4px 0; border-bottom: 1px solid #334155; color: var(--muted); }
+  .log-entry:last-child { border-bottom: none; }
+  .log-time { color: var(--accent); }
+  .no-data { color: var(--muted); text-align: center; padding: 40px; }
+  .last-update { color: var(--muted); font-size: 0.75rem; text-align: right; margin-top: 8px; }
+  .info-box {
+    background: var(--card); border-radius: 12px; padding: 16px;
+    border: 1px solid #334155; margin-bottom: 20px; font-size: 0.85rem;
+    color: var(--muted);
+  }
+  .info-box code { color: var(--accent); background: #0f172a; padding: 2px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>CareSpeak ESP32 Vitals Dashboard</h1>
+  <p class="subtitle">Live heart rate, SpO2, battery & SOS from your wearable</p>
+
+  <div class="info-box">
+    <strong>How to use:</strong> Enter your session ID below and click Connect.
+    The dashboard polls the CareSpeak server every 3 seconds for new readings.
+    Default session: <code>ZCAUEL6J</code>
+  </div>
+
+  <div class="controls">
+    <input type="text" id="sessionInput" placeholder="Session ID (e.g. ZCAUEL6J)" value="ZCAUEL6J">
+    <button onclick="connect()">Connect</button>
+    <button onclick="disconnect()" style="background:#475569;color:#f1f5f9;">Disconnect</button>
+  </div>
+
+  <div class="status-bar">
+    <div class="dot" id="statusDot"></div>
+    <span id="statusText">Disconnected</span>
+    <span style="margin-left:auto;color:var(--muted);font-size:0.8rem;" id="deviceInfo"></span>
+  </div>
+
+  <div class="sos-alert" id="sosAlert">
+    <div class="sos-title">🚨 SOS EMERGENCY</div>
+    <div class="sos-time" id="sosTime"></div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-label">Heart Rate</div>
+      <div class="card-value hr" id="hrValue">--</div>
+      <div class="card-unit">BPM</div>
+    </div>
+    <div class="card">
+      <div class="card-label">SpO2</div>
+      <div class="card-value spo2" id="spo2Value">--</div>
+      <div class="card-unit">%</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Battery</div>
+      <div class="card-value battery" id="batteryValue">--</div>
+      <div class="card-unit">%</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Signal (RSSI)</div>
+      <div class="card-value rssi" id="rssiValue">--</div>
+      <div class="card-unit">dBm</div>
+    </div>
+  </div>
+
+  <div class="last-update" id="lastUpdate">Waiting for data...</div>
+
+  <div class="card" style="margin-top:20px;">
+    <div class="card-label" style="margin-bottom:12px;">Event Log</div>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<script>
+const SERVER = "https://carespeak-artificial.vercel.app";
+let sessionId = "";
+let polling = false;
+let pollTimer = null;
+let lastSosTime = 0;
+let lastVitalsTime = 0;
+
+function log(msg) {
+  const logEl = document.getElementById("log");
+  const time = new Date().toLocaleTimeString();
+  const entry = document.createElement("div");
+  entry.className = "log-entry";
+  entry.innerHTML = `<span class="log-time">[${time}]</span> ${msg}`;
+  logEl.prepend(entry);
+  if (logEl.children.length > 50) logEl.removeChild(logEl.lastChild);
+}
+
+function setStatus(state, text) {
+  const dot = document.getElementById("statusDot");
+  dot.className = "dot " + state;
+  document.getElementById("statusText").textContent = text;
+}
+
+function connect() {
+  const input = document.getElementById("sessionInput").value.trim().toUpperCase();
+  if (input.length < 3) { alert("Enter a valid session ID"); return; }
+  sessionId = input;
+  polling = true;
+  setStatus("orange", "Connecting...");
+  log(`Connecting to session ${sessionId}...`);
+  poll();
+  pollTimer = setInterval(poll, 3000);
+}
+
+function disconnect() {
+  polling = false;
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = null;
+  sessionId = "";
+  setStatus("", "Disconnected");
+  log("Disconnected");
+}
+
+async function poll() {
+  if (!polling || !sessionId) return;
+  try {
+    const res = await fetch(`${SERVER}/api/sync?session=${encodeURIComponent(sessionId)}`, { cache: "no-store" });
+    if (!res.ok) {
+      setStatus("red", `Error ${res.status}`);
+      log(`Poll failed: HTTP ${res.status}`);
+      return;
+    }
+    const data = await res.json();
+    setStatus("green", "Connected");
+
+    // Vitals
+    const v = data.vitals;
+    if (v) {
+      if (v.heartRate != null) document.getElementById("hrValue").textContent = v.heartRate;
+      if (v.spo2 != null) document.getElementById("spo2Value").textContent = v.spo2;
+      if (v.batteryPct != null) document.getElementById("batteryValue").textContent = v.batteryPct;
+      if (v.rssi != null) document.getElementById("rssiValue").textContent = v.rssi;
+      document.getElementById("deviceInfo").textContent = v.deviceId || "";
+      const receivedAt = v.receivedAt ? new Date(v.receivedAt).toLocaleTimeString() : "";
+      document.getElementById("lastUpdate").textContent = `Last update: ${receivedAt}`;
+      if (v.receivedAt && v.receivedAt !== lastVitalsTime) {
+        lastVitalsTime = v.receivedAt;
+        log(`Vitals: HR=${v.heartRate ?? "--"} BPM, SpO2=${v.spo2 ?? "--"}%, Batt=${v.batteryPct ?? "--"}%, RSSI=${v.rssi ?? "--"} dBm`);
+      }
+    }
+
+    // SOS alerts
+    const entries = data.entries || [];
+    const sosEntries = entries.filter(e => e.gesture === "EMERGENCY" && e.source === "iot");
+    if (sosEntries.length > 0) {
+      const latest = sosEntries.sort((a,b) => b.timestamp - a.timestamp)[0];
+      if (latest.timestamp !== lastSosTime) {
+        lastSosTime = latest.timestamp;
+        const alert = document.getElementById("sosAlert");
+        alert.classList.add("show");
+        document.getElementById("sosTime").textContent = `Received at ${new Date(latest.timestamp).toLocaleTimeString()}`;
+        log(`🚨 SOS EMERGENCY received!`);
+        setTimeout(() => alert.classList.remove("show"), 10000);
+      }
+    }
+  } catch (err) {
+    setStatus("red", "Network error");
+    log(`Network error: ${err.message}`);
+  }
+}
+</script>
+</body>
+</html>

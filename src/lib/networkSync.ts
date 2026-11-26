@@ -14,8 +14,8 @@ import {
 } from "./outbox";
 
 const BROADCAST_CHANNEL = "carespeak_sync";
-const POLL_INTERVAL_MS = 500;
-const MAX_POLL_INTERVAL_MS = 8000;
+const POLL_INTERVAL_MS = 3000;
+const MAX_POLL_INTERVAL_MS = 15000;
 const SSE_GRACE_MS = 3000;
 /** While SSE is connected we still reconcile via REST every 2s. Critical on
  *  serverless (Vercel): /api/stream and /api/sync may run on different lambda

@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CareSpeak ESP32 Vitals Dashboard</title>
+<style>
+  :root {
+    --bg: #0f172a; --card: #1e293b; --card2: #334155;
+    --accent: #38bdf8; --green: #22c55e; --red: #ef4444;
+    --orange: #f59e0b; --text: #f1f5f9; --muted: #94a3b8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 20px; }
+  .container { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin-bottom: 4px; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px; }
+  .card { background: var(--card); border-radius: 12px; padding: 20px; border: 1px solid #334155; }
+  .card-label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  .card-value { font-size: 2.5rem; font-weight: 700; line-height: 1; }
+  .card-unit { color: var(--muted); font-size: 0.8rem; margin-top: 4px; }
+  .hr { color: #f87171; } .spo2 { color: #38bdf8; } .battery { color: #22c55e; } .rssi { color: #a78bfa; }
+  .status-bar { display: flex; align-items: center; gap: 10px; background: var(--card); border-radius: 12px; padding: 12px 20px; margin-bottom: 20px; border: 1px solid #334155; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+  .dot.green { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.red { background: var(--red); box-shadow: 0 0 8px var(--red); }
+  .dot.orange { background: var(--orange); box-shadow: 0 0 8px var(--orange); }
+  .dot.grey { background: #64748b; }
+  .sos-alert { background: #7f1d1d; border: 2px solid var(--red); border-radius: 12px; padding: 16px 20px; margin-bottom: 20px; display: none; animation: pulse 1s infinite; }
+  .sos-alert.show { display: block; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.7; } }
+  .sos-title { font-size: 1.2rem; font-weight: 700; color: #fca5a5; }
+  .sos-time { color: #fecaca; font-size: 0.85rem; margin-top: 4px; }
+  .log { background: var(--card); border-radius: 12px; padding: 16px; border: 1px solid #334155; max-height: 300px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 0.8rem; }
+  .log-entry { padding: 4px 0; border-bottom: 1px solid #334155; color: var(--muted); }
+  .log-entry:last-child { border-bottom: none; }
+  .log-time { color: var(--accent); }
+  .last-update { color: var(--muted); font-size: 0.78rem; text-align: right; margin-top: 8px; }
+  .info-box { background: var(--card); border-radius: 12px; padding: 16px; border: 1px solid #334155; margin-bottom: 20px; font-size: 0.85rem; color: var(--muted); line-height: 1.9; }
+  .info-box code { color: var(--accent); background: #0f172a; padding: 2px 6px; border-radius: 4px; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; }
+  .pill.ok { background: rgba(34,197,94,.15); color: #4ade80; }
+  .pill.bad { background: rgba(239,68,68,.15); color: #f87171; }
+  .hint { color: var(--muted); font-size: 0.8rem; margin-top: 14px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>CareSpeak ESP32 Vitals Dashboard</h1>
+  <p class="subtitle">Live heart rate, SpO2, battery &amp; SOS from your wearable (local server)</p>
+
+  <div class="info-box">
+    <div><strong>Server:</strong> <code id="serverUrl"></code> <span id="serverStatus" class="pill bad">connecting</span></div>
+    <div><strong>Refresh:</strong> every 1 second &nbsp;|&nbsp; <strong>Device goes offline after:</strong> 15 seconds without a packet</div>
+  </div>
+
+  <div class="status-bar">
+    <div class="dot grey" id="statusDot"></div>
+    <span id="statusText">Connecting...</span>
+    <span style="margin-left:auto;color:var(--muted);font-size:0.8rem;" id="deviceInfo"></span>
+  </div>
+
+  <div class="sos-alert" id="sosAlert">
+    <div class="sos-title">🚨 SOS EMERGENCY</div>
+    <div class="sos-time" id="sosTime"></div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-label">Heart Rate</div>
+      <div class="card-value hr" id="hrValue">--</div>
+      <div class="card-unit">BPM</div>
+    </div>
+    <div class="card">
+      <div class="card-label">SpO2</div>
+      <div class="card-value spo2" id="spo2Value">--</div>
+      <div class="card-unit">%</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Battery</div>
+      <div class="card-value battery" id="batteryValue">--</div>
+      <div class="card-unit">%</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Signal (RSSI)</div>
+      <div class="card-value rssi" id="rssiValue">--</div>
+      <div class="card-unit">dBm</div>
+    </div>
+  </div>
+
+  <div class="last-update" id="lastUpdate">Waiting for data...</div>
+
+  <div class="card" style="margin-top:20px;">
+    <div class="card-label" style="margin-bottom:12px;">Event Log</div>
+    <div class="log" id="log"></div>
+    <div class="hint">
+      If the device is offline: check the 18650 voltage, the Wi-Fi router, and that
+      the local server is running. The TP4056 OUT+ is battery voltage (~3.7–4.2 V);
+      the ESP32 5V pin needs a <strong>5 V boost module</strong> for stable Wi-Fi.
+    </div>
+  </div>
+</div>
+
+<script>
+const SERVER = window.location.origin;
+const STALE_MS = 15000;          // 3 missed packets at the 5 s firmware interval
+document.getElementById("serverUrl").textContent = SERVER;
+
+let serverConnected = false;
+let serverReachable = true;
+let latestVitals = null;
+let clockOffset = 0;             // serverTime - browserTime
+let lastReceivedAt = 0;
+let lastSosTime = 0;
+let lastOffline = null;
+
+function log(msg) {
+  const logEl = document.getElementById("log");
+  const entry = document.createElement("div");
+  entry.className = "log-entry";
+  entry.innerHTML = `<span class="log-time">[${new Date().toLocaleTimeString()}]</span> ${msg}`;
+  logEl.prepend(entry);
+  if (logEl.children.length > 60) logEl.removeChild(logEl.lastChild);
+}
+
+function fmtAge(ms) {
+  if (ms < 1500) return "now";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${s % 60}s`;
+}
+
+function fmtTime(ts) {
+  return ts ? new Date(ts).toLocaleTimeString() : "--";
+}
+
+function setServerStatus(ok) {
+  const el = document.getElementById("serverStatus");
+  el.className = "pill " + (ok ? "ok" : "bad");
+  el.textContent = ok ? "connected" : "unreachable";
+}
+
+function setDeviceStatus(state, text) {
+  document.getElementById("statusDot").className = "dot " + state;
+  document.getElementById("statusText").textContent = text;
+}
+
+function clearCards() {
+  document.getElementById("hrValue").textContent = "--";
+  document.getElementById("spo2Value").textContent = "--";
+  document.getElementById("batteryValue").textContent = "--";
+  document.getElementById("rssiValue").textContent = "--";
+}
+
+function hrText(v)   { return v != null && v > 0 ? v : "--"; }
+function spo2Text(v) { return v != null && v > 0 ? v : "--"; }
+function numText(v)  { return v != null ? v : "--"; }
+
+function render() {
+  if (!serverReachable) {
+    setDeviceStatus("red", "Dashboard server unreachable — start server.js");
+    clearCards();
+    document.getElementById("lastUpdate").textContent = "Cannot reach local server";
+    return;
+  }
+  if (!latestVitals || !latestVitals.receivedAt) {
+    setDeviceStatus("orange", "Waiting for first packet from ESP32...");
+    clearCards();
+    document.getElementById("lastUpdate").textContent = "No packets received yet";
+    return;
+  }
+
+  const nowServer = Date.now() + clockOffset;
+  const age = Math.max(0, nowServer - latestVitals.receivedAt);
+  const online = age <= STALE_MS;
+  const v = latestVitals;
+
+  document.getElementById("deviceInfo").textContent = v.deviceId || "";
+
+  if (!online) {
+    setDeviceStatus("red", `ESP32 OFFLINE — last packet ${fmtAge(age)} ago`);
+    clearCards();
+    document.getElementById("lastUpdate").textContent =
+      `Last packet: ${fmtTime(v.receivedAt)} (${fmtAge(age)} ago)`;
+    if (lastOffline !== true) {
+      lastOffline = true;
+      log(`Device offline — no packet for ${fmtAge(age)}`);
+    }
+    return;
+  }
+
+  lastOffline = false;
+  const finger = v.finger === true || v.heartRate != null || v.spo2 != null;
+  if (finger) {
+    setDeviceStatus("green", "ESP32 online — finger detected");
+  } else {
+    setDeviceStatus("orange", "ESP32 online — no finger detected");
+  }
+
+  document.getElementById("hrValue").textContent = hrText(v.heartRate);
+  document.getElementById("spo2Value").textContent = spo2Text(v.spo2);
+  document.getElementById("batteryValue").textContent = numText(v.batteryPct);
+  document.getElementById("rssiValue").textContent = numText(v.rssi);
+  document.getElementById("lastUpdate").textContent =
+    `Last update: ${fmtTime(v.receivedAt)} (${fmtAge(age)} ago)`;
+}
+
+function showSos(alert) {
+  const box = document.getElementById("sosAlert");
+  box.classList.add("show");
+  document.getElementById("sosTime").textContent =
+    `Received at ${new Date(alert.timestamp).toLocaleTimeString()}`;
+  log("🚨 SOS EMERGENCY received!");
+  setTimeout(() => box.classList.remove("show"), 10000);
+}
+
+async function poll() {
+  try {
+    const res = await fetch("/api/vitals?_=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+
+    serverReachable = true;
+    if (!serverConnected) {
+      serverConnected = true;
+      setServerStatus(true);
+      log("Dashboard server connected");
+    }
+    if (data.serverTime) clockOffset = data.serverTime - Date.now();
+
+    latestVitals = data.vitals || null;
+
+    if (latestVitals && latestVitals.receivedAt !== lastReceivedAt) {
+      lastReceivedAt = latestVitals.receivedAt;
+      const v = latestVitals;
+      const finger = v.finger === true || v.heartRate != null || v.spo2 != null;
+      log(`Vitals: HR=${hrText(v.heartRate)} BPM, SpO2=${spo2Text(v.spo2)}%, ` +
+          `RSSI=${numText(v.rssi)} dBm${finger ? "" : " (no finger)"}`);
+    }
+
+    const alerts = data.sosAlerts || [];
+    if (alerts.length > 0) {
+      const latest = alerts[0];
+      if (lastSosTime === 0) {
+        lastSosTime = latest.timestamp;
+        if (Date.now() - latest.timestamp < 60000) showSos(latest);
+      } else if (latest.timestamp !== lastSosTime) {
+        lastSosTime = latest.timestamp;
+        showSos(latest);
+      }
+    }
+
+    render();
+  } catch (err) {
+    serverReachable = false;
+    latestVitals = null;
+    if (serverConnected) {
+      serverConnected = false;
+      setServerStatus(false);
+      log("Dashboard server unreachable: " + err.message);
+    }
+    setServerStatus(false);
+    setDeviceStatus("red", "Dashboard server unreachable — start server.js");
+    clearCards();
+    document.getElementById("lastUpdate").textContent = "Cannot reach local server";
+  }
+}
+
+poll();
+setInterval(poll, 1000);
+setInterval(render, 500);
+</script>
+</body>
+</html>

@@ -37,7 +37,7 @@ const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 const char* SERVER_URL   = "http://192.168.1.5:3000/api/ingest";
 const char* SESSION_ID   = "ABC123";            // session shown on the patient screen
 const char* DEVICE_ID    = "esp32_ward4_bed12";
-const char* DEVICE_TOKEN = "";                  // must match CARESPEAK_DEVICE_TOKEN env ("" = demo mode)
+const char* DEVICE_TOKEN = "c5aab5ce0293a504f66a0d251f63693c0a4cd7da56009581390b8a779ce98985";                  // must match CARESPEAK_DEVICE_TOKEN env ("" = demo mode)
 
 #define PIN_SOS_BUTTON 27                       // wired to GND, uses internal pull-up
 #define PIN_BUZZER     25

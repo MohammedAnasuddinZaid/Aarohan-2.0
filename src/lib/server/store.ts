@@ -395,21 +395,29 @@ async function createRedisDriver(): Promise<SessionStore> {
     }
 
     async setVitals(session: string, vitals: DeviceVitals): Promise<void> {
-      const k = redisKey(session).vitals;
-      await redis.hset(k, { [vitals.deviceId]: JSON.stringify({ ...vitals, receivedAt: Date.now() }) });
-      await redis.expire(k, REDIS_TTL_SECONDS);
-      void touchRegistry(redis, session, Date.now());
+      try {
+        const k = redisKey(session).vitals;
+        await redis.hset(k, { [vitals.deviceId]: JSON.stringify({ ...vitals, receivedAt: Date.now() }) });
+        await redis.expire(k, REDIS_TTL_SECONDS);
+      } catch (e) {
+        console.error("Redis setVitals failed:", e instanceof Error ? e.message : e);
+      }
     }
 
     async getVitals(session: string): Promise<Record<string, DeviceVitals>> {
-      const raw = await redis.hgetall(redisKey(session).vitals);
-      const out: Record<string, DeviceVitals> = {};
-      for (const [k, v] of Object.entries(raw ?? {})) {
-        try {
-          out[k] = typeof v === "string" ? JSON.parse(v) : (v as DeviceVitals);
-        } catch {}
+      try {
+        const raw = await redis.hgetall(redisKey(session).vitals);
+        const out: Record<string, DeviceVitals> = {};
+        for (const [k, v] of Object.entries(raw ?? {})) {
+          try {
+            out[k] = typeof v === "string" ? JSON.parse(v) : (v as DeviceVitals);
+          } catch {}
+        }
+        return out;
+      } catch (e) {
+        console.error("Redis getVitals failed:", e instanceof Error ? e.message : e);
+        return {};
       }
-      return out;
     }
 
     async setReply(session: string, reply: NurseReply): Promise<void> {

@@ -97,11 +97,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   if (body.type === "vitals") {
-    await store.setVitals(body.session.toUpperCase(), {
-      deviceId,
-      ...sanitizeVitals(body),
-      receivedAt: now,
-    });
+    try {
+      await store.setVitals(body.session.toUpperCase(), {
+        deviceId,
+        ...sanitizeVitals(body),
+        receivedAt: now,
+      });
+    } catch (e) {
+      console.error("setVitals failed (degraded mode):", e instanceof Error ? e.message : e);
+    }
     return NextResponse.json({ ok: true, serverTime: now });
   }
 

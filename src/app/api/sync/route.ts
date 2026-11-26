@@ -73,10 +73,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const since = Number(searchParams.get("since") ?? "0");
   const store = await getSessionStore();
   const [entries, patientMetrics, vitals, replies] = await Promise.all([
-    store.getEntriesSince(session, isFinite(since) ? since : 0),
-    store.getMetrics(session),
-    store.getVitals(session),
-    store.getRepliesSince(session, isFinite(since) ? Math.max(since - 60000, 0) : 0),
+    store.getEntriesSince(session, isFinite(since) ? since : 0).catch(() => [] as any[]),
+    store.getMetrics(session).catch(() => ({})),
+    store.getVitals(session).catch(() => ({})),
+    store.getRepliesSince(session, isFinite(since) ? Math.max(since - 60000, 0) : 0).catch(() => [] as any[]),
   ]);
 
   return NextResponse.json(
