@@ -202,6 +202,24 @@ describe("portal context + answering", () => {
     expect(answer.answer.toLowerCase()).toContain("no patient is linked");
   });
 
+  it("honours an explicit client patient even without a stored link", async () => {
+    const ctx = await buildPortalContext("OVRD01", { patientId: "pt_0002" });
+    expect(ctx.patient?.id).toBe("pt_0002");
+    expect(ctx.link?.patientId).toBe("pt_0002");
+    expect(ctx.suggestedQuestions.length).toBeGreaterThan(0);
+
+    const answer = await askPortal("OVRD01", "What is this patient's main concern?", { patientId: "pt_0002" });
+    expect(answer.patientId).toBe("pt_0002");
+    expect(answer.answer).toContain("Rahul Verma");
+  });
+
+  it("can ignore a stale stored link after an explicit unlink", async () => {
+    await linkSessionToPatient("OVRD02", "pt_0001");
+    expect((await buildPortalContext("OVRD02")).patient?.id).toBe("pt_0001");
+    const afterUnlink = await buildPortalContext("OVRD02", { ignoreLink: true });
+    expect(afterUnlink.patient).toBeNull();
+  });
+
   it("uses the session's own patient before the nurse links one", async () => {
     const { session } = await createSession({
       patientId: "pt_0001",

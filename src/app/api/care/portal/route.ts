@@ -38,6 +38,8 @@ interface PortalBody {
   voice?: boolean;
   detail?: string;
   history?: unknown;
+  /** The phone explicitly removed its patient; ignore a stale stored link. */
+  unlinked?: boolean;
 }
 
 function normalizeSession(raw: unknown): string | null {
@@ -54,7 +56,12 @@ export async function GET(req: NextRequest) {
   const access = await authorizeSession(req, session, url.searchParams.get("pair"), { allowDemoUnregistered: true });
   if (!access.allowed) return fail("Scan the patient's QR code, or sign in, to use the assistant.", 401);
 
-  return ok({ context: await buildPortalContext(session) });
+  return ok({
+    context: await buildPortalContext(session, {
+      patientId: url.searchParams.get("patientId"),
+      ignoreLink: url.searchParams.get("unlinked") === "1",
+    }),
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -66,13 +73,18 @@ export async function POST(req: NextRequest) {
   if (!access.allowed) return fail("Scan the patient's QR code, or sign in, to use the assistant.", 401);
 
   const action = (body?.action ?? "context").trim();
+  const patientId = body?.patientId?.trim() || null;
+  const contextOptions = {
+    patientId,
+    ignoreLink: Boolean(body?.unlinked),
+  };
 
   switch (action) {
     case "context":
-      return ok({ context: await buildPortalContext(session) });
+      return ok({ context: await buildPortalContext(session, contextOptions) });
 
     case "brief": {
-      const brief = await portalBriefing(session);
+      const brief = await portalBriefing(session, contextOptions);
       return ok({ brief });
     }
 
@@ -90,6 +102,8 @@ export async function POST(req: NextRequest) {
         voice: Boolean(body?.voice),
         detail,
         history,
+        patientId,
+        ignoreLink: Boolean(body?.unlinked),
       });
       // Dictation ("send a message to ...") is executed for real, so the
       // patient's screen shows it — not just a promise in the chat.
@@ -98,7 +112,7 @@ export async function POST(req: NextRequest) {
     }
 
     case "sbar": {
-      const sbar = await sbarPortal(session);
+      const sbar = await sbarPortal(session, contextOptions);
       if (!sbar) return fail("Link a patient to generate an SBAR handoff.", 400);
       await appendAudit({
         actorRole: access.actor?.role ?? "nurse",
@@ -111,34 +125,41 @@ export async function POST(req: NextRequest) {
     }
 
     case "alert": {
-      const result = await alertPortal(session, { force: Boolean(body?.force) });
+      const result = await alertPortal(session, {
+        force: Boolean(body?.force),
+        patientId,
+        ignoreLink: Boolean(body?.unlinked),
+      });
       return ok({ alert: result });
     }
 
     case "link": {
-      const patientId = body?.patientId?.trim();
-      if (!patientId) return fail("Choose a patient to link.", 400);
+      const linkPatientId = body?.patientId?.trim();
+      if (!linkPatientId) return fail("Choose a patient to link.", 400);
 
-      const patient = await getPatient(patientId);
+      const patient = await getPatient(linkPatientId);
       if (!patient) return fail("Patient not found.", 404);
 
+      let link = null;
       try {
-        const link = await linkPortalSession(session, patientId, access.actor?.displayName);
-        if (!link) return fail("Patient not found.", 404);
-
+        link = await linkPortalSession(session, linkPatientId, access.actor?.displayName);
         await appendAudit({
           actorRole: access.actor?.role ?? "nurse",
           actorId: access.actor?.userId,
           action: "care.session_linked",
           sessionId: session,
-          patientId,
+          patientId: linkPatientId,
           detail: { via: "nurse-portal" },
         }).catch(() => undefined);
-
-        return ok({ link, context: await buildPortalContext(session) });
       } catch {
-        return ok({ link: null, context: await buildPortalContext(session).catch(() => null) });
+        // The store can be read-only (quota) or briefly unavailable. The
+        // context below still carries the chosen patient so the call works.
       }
+
+      // Build with the chosen patient as an explicit override: this makes the
+      // response correct even when the persistent link write failed.
+      const context = await buildPortalContext(session, { patientId: linkPatientId });
+      return ok({ link: context.link ?? link, context });
     }
 
     case "unlink": {
@@ -153,7 +174,8 @@ export async function POST(req: NextRequest) {
       } catch {
         // ignore storage errors
       }
-      return ok({ context: await buildPortalContext(session) });
+      // Never fall back to a stale stored link after an explicit removal.
+      return ok({ context: await buildPortalContext(session, { ignoreLink: true }) });
     }
 
     default:

@@ -182,8 +182,8 @@ async function ensurePatientsSeeded(): Promise<void> {
 }
 
 export async function listPatients(): Promise<ClinicalPatient[]> {
-  await ensurePatientsSeeded();
-  await ensureDemoSeed();
+  await ensurePatientsSeeded().catch(() => undefined);
+  await ensureDemoSeed().catch(() => undefined);
   const d = await getDriver();
   const index = stringArray(await d.getDoc(K.patientIndex));
   const out: ClinicalPatient[] = [];
@@ -191,7 +191,19 @@ export async function listPatients(): Promise<ClinicalPatient[]> {
     const p = asClinicalPatient(await d.getDoc(K.patient(id)));
     if (p) out.push(p);
   }
-  return out.sort((a, b) => a.id.localeCompare(b.id));
+  if (out.length) return out.sort((a, b) => a.id.localeCompare(b.id));
+  // When the shared store is unreachable (e.g. Upstash quota exhausted) the
+  // seeding writes land in this instance's in-memory overlay, but a cold
+  // instance may still see an empty index. Fall back to the in-code dataset so
+  // the nurse console and the browser call always have a patient to pick.
+  // Only do this when demo seeding is enabled (the default); tests that turn
+  // seeding off expect an genuinely empty store.
+  if ((process.env.CARE_SEED_DEMO ?? "").toLowerCase() === "false") return out;
+  const deleted = new Set<string>();
+  for (const p of SYNTHETIC_PATIENTS) {
+    if (await d.getDoc(K.patientDeleted(p.id))) deleted.add(p.id);
+  }
+  return SYNTHETIC_PATIENTS.filter((p) => !deleted.has(p.id)).sort((a, b) => a.id.localeCompare(b.id));
 }
 
 export async function getPatient(id: string): Promise<ClinicalPatient | null> {
@@ -646,8 +658,14 @@ export async function listReports(patientId?: string): Promise<CareReport[]> {
 
 export async function appendAudit(entry: Omit<CareAuditEntry, "id" | "at">): Promise<CareAuditEntry> {
   const stored: CareAuditEntry = { id: newId("aud"), at: isoNow(), ...entry };
-  const d = await getDriver();
-  await d.appendList(K.audit, stored, 5000);
+  try {
+    const d = await getDriver();
+    await d.appendList(K.audit, stored, 5000);
+  } catch {
+    // Auditing must never turn a successful clinical action (or a sign-in)
+    // into a 500. The in-process Redis fallback already captures it whenever
+    // the failure is a quota/network write error.
+  }
   return stored;
 }
 

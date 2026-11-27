@@ -11,8 +11,10 @@
  * any real use.
  */
 import type { NextRequest } from "next/server";
+import { createHmac } from "node:crypto";
 import { hashToken, newToken, safeEqual } from "./crypto";
 import { delLogin, getLogin, putLogin, type LoginRecord } from "./repo";
+import { getDriver } from "./store";
 import { demoCredentialsEnabled } from "./securityMode";
 
 export const NURSE_COOKIE = "care_session";
@@ -66,11 +68,98 @@ export interface LoginOutcome {
   record: LoginRecord;
 }
 
+// ---------------------------------------------------------------------------
+// self-validating session tokens
+//
+// The persistent store can be read-only (Upstash quota exhausted) or split
+// across serverless instances. A purely opaque token then fails to validate on
+// every route except the one that minted it. To keep the nurse console usable
+// in that state, every token also carries its own signed record; when the
+// persistent store is unavailable we accept it without a lookup.
+// ---------------------------------------------------------------------------
+function sessionSecret(): Buffer {
+  const explicit = process.env.CARE_SESSION_SECRET?.trim();
+  const base =
+    explicit ||
+    [process.env.CARE_NURSE_USER, process.env.CARE_NURSE_PASS, process.env.CARE_ADMIN_USER, process.env.CARE_ADMIN_PASS]
+      .filter(Boolean)
+      .join("|") ||
+    "carespeak-demo-session-secret";
+  return Buffer.from(hashToken(`${base}|care-session-v1`), "hex");
+}
+
+function signPayload(payload: string): string {
+  return createHmac("sha256", sessionSecret()).update(payload, "utf8").digest("base64url");
+}
+
+function mintSessionToken(record: LoginRecord): string {
+  const body = Buffer.from(
+    JSON.stringify({
+      v: 1,
+      userId: record.userId,
+      username: record.username,
+      displayName: record.displayName,
+      role: record.role,
+      expiresAt: record.expiresAt,
+      nonce: newToken().slice(0, 16),
+    }),
+    "utf8"
+  ).toString("base64url");
+  return `${body}.${signPayload(body)}`;
+}
+
+function readSessionToken(token: string): LoginRecord | null {
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const [body, sig] = parts;
+  if (!body || !sig) return null;
+  if (!safeEqual(signPayload(body), sig)) return null;
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (parsed.v !== 1) return null;
+  if (typeof parsed.userId !== "string" || typeof parsed.username !== "string") return null;
+  if (typeof parsed.displayName !== "string") return null;
+  if (parsed.role !== "admin" && parsed.role !== "nurse") return null;
+  if (typeof parsed.expiresAt !== "string") return null;
+  const expiresAt = Date.parse(parsed.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
+  return {
+    userId: parsed.userId,
+    username: parsed.username,
+    displayName: parsed.displayName,
+    role: parsed.role,
+    expiresAt: parsed.expiresAt,
+  };
+}
+
+let storeWriteProbe: { at: number; unavailable: boolean } | null = null;
+async function storeWritesUnavailable(): Promise<boolean> {
+  const now = Date.now();
+  if (storeWriteProbe && now - storeWriteProbe.at < 30_000) return storeWriteProbe.unavailable;
+  let unavailable = false;
+  try {
+    const d = await getDriver();
+    if (!d.writable) {
+      unavailable = true;
+    } else {
+      await d.setDoc("care:login:probe", { at: new Date().toISOString() });
+      unavailable = !d.writable;
+    }
+  } catch {
+    unavailable = true;
+  }
+  storeWriteProbe = { at: now, unavailable };
+  return unavailable;
+}
+
 export async function login(username: string, password: string): Promise<LoginOutcome | null> {
   const match = credentials().find((c) => c.username.toLowerCase() === username.trim().toLowerCase());
   if (!match) return null;
   if (!safeEqual(hashToken(password), hashToken(match.password))) return null;
-  const token = newToken();
   const record: LoginRecord = {
     userId: match.userId,
     username: match.username,
@@ -78,6 +167,7 @@ export async function login(username: string, password: string): Promise<LoginOu
     role: match.role,
     expiresAt: new Date(Date.now() + SESSION_MINUTES * 60_000).toISOString(),
   };
+  const token = mintSessionToken(record);
   await putLogin(hashToken(token), record);
   return { token, record };
 }
@@ -108,7 +198,14 @@ function cookieValue(req: NextRequest, name: string): string | null {
 export async function nurseFromRequest(req: NextRequest): Promise<LoginRecord | null> {
   const token = cookieValue(req, NURSE_COOKIE);
   if (!token) return null;
-  return getLogin(hashToken(token));
+  const stored = await getLogin(hashToken(token));
+  if (stored) return stored;
+  // Only fall back to the self-validating token when the persistent store is
+  // known to be unable to keep a session (quota exhausted / network error).
+  // When writes work, a missing record means the session was logged out or has
+  // expired, and we must not resurrect it from a copied cookie.
+  if (!(await storeWritesUnavailable())) return null;
+  return readSessionToken(token);
 }
 
 export interface ParticipantAuth {

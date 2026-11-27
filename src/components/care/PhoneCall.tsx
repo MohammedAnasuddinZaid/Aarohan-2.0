@@ -177,6 +177,52 @@ function normalizeSessionId(raw: string | null | undefined): string {
   return /^[A-Z0-9_-]{3,32}$/.test(clean) ? clean : "";
 }
 
+/**
+ * The phone remembers which patient the caller chose. The session link in the
+ * shared store can be unavailable (read-only Redis quota, cold instance), and
+ * the call must still open the right chart.
+ */
+const CALL_PATIENT_KEY = "care:call:patient:";
+const CALL_UNLINKED_KEY = "care:call:unlinked:";
+
+function loadCallPatient(sessionId: string): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(`${CALL_PATIENT_KEY}${sessionId}`) || null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCallPatient(sessionId: string, patientId: string | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (patientId) window.localStorage.setItem(`${CALL_PATIENT_KEY}${sessionId}`, patientId);
+    else window.localStorage.removeItem(`${CALL_PATIENT_KEY}${sessionId}`);
+  } catch {
+    /* storage full or blocked — the in-memory ref still works for this call */
+  }
+}
+
+function loadCallUnlinked(sessionId: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(`${CALL_UNLINKED_KEY}${sessionId}`) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveCallUnlinked(sessionId: string, unlinked: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (unlinked) window.localStorage.setItem(`${CALL_UNLINKED_KEY}${sessionId}`, "1");
+    else window.localStorage.removeItem(`${CALL_UNLINKED_KEY}${sessionId}`);
+  } catch {
+    /* storage full or blocked */
+  }
+}
+
 /** Spoken summary of whatever the patient device is streaming right now. */
 function liveSummary(ctx: PortalContext | null): string {
   if (!ctx) return "No live readings have arrived from the patient device yet.";
@@ -264,6 +310,10 @@ export default function BrowserCall({
 
   const pairRef = useRef<string | null>(pair);
   pairRef.current = activePair;
+
+  // Survives a lost server-side link and a page refresh (see loadCallPatient).
+  const selectedPatientRef = useRef<string | null>(null);
+  const unlinkedRef = useRef(false);
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const startedRef = useRef(false);
@@ -397,6 +447,8 @@ export default function BrowserCall({
           voice: voiceOn,
           detail,
           history,
+          patientId: selectedPatientRef.current,
+          unlinked: unlinkedRef.current,
         });
         append("agent", res.result.answer, res.result.engine, {
           scope: res.result.scope,
@@ -532,6 +584,14 @@ export default function BrowserCall({
 
   // --- load / refresh the patient context -----------------------------------
 
+  // Restore the phone's own patient choice before the first portal request.
+  useEffect(() => {
+    if (!activeSessionId) return;
+    selectedPatientRef.current = loadCallPatient(activeSessionId);
+    unlinkedRef.current = loadCallUnlinked(activeSessionId);
+    if (selectedPatientRef.current) setPickedPatient(selectedPatientRef.current);
+  }, [activeSessionId]);
+
   useEffect(() => {
     if (!sessionReady) return;
     if (!activeSessionId) {
@@ -543,11 +603,32 @@ export default function BrowserCall({
     let active = true;
     setLoading(true);
     setLoadError(null);
-    carePortalContext(activeSessionId, activePair)
+    const storedPatient = selectedPatientRef.current ?? loadCallPatient(activeSessionId);
+    const storedUnlinked = unlinkedRef.current || loadCallUnlinked(activeSessionId);
+    carePortalContext(
+      activeSessionId,
+      activePair,
+      storedUnlinked ? null : storedPatient,
+      storedUnlinked
+    )
       .then((res) => {
         if (!active) return;
         setContext(res.context);
-        if (res.context.link) setPickedPatient(res.context.link.patientId);
+        const id = res.context.patient?.id ?? res.context.link?.patientId ?? null;
+        if (id) {
+          selectedPatientRef.current = id;
+          unlinkedRef.current = false;
+          saveCallPatient(activeSessionId, id);
+          saveCallUnlinked(activeSessionId, false);
+          setPickedPatient(id);
+        } else if (storedUnlinked) {
+          selectedPatientRef.current = null;
+          unlinkedRef.current = true;
+        } else if (storedPatient) {
+          // The remembered patient no longer exists; drop it.
+          selectedPatientRef.current = null;
+          saveCallPatient(activeSessionId, null);
+        }
       })
       .catch((err) => {
         if (!active) return;
@@ -570,17 +651,29 @@ export default function BrowserCall({
     let active = true;
     const refresh = () => {
       if (!active || document.hidden) return;
-      carePortalContext(activeSessionId, pairRef.current)
+      carePortalContext(
+        activeSessionId,
+        pairRef.current,
+        unlinkedRef.current ? null : selectedPatientRef.current,
+        unlinkedRef.current
+      )
         .then((res) => {
           if (active) {
             setContext(res.context);
-            if (res.context.link) setPickedPatient(res.context.link.patientId);
+            const id = res.context.patient?.id ?? res.context.link?.patientId ?? null;
+            if (id) {
+              selectedPatientRef.current = id;
+              unlinkedRef.current = false;
+              saveCallPatient(activeSessionId, id);
+              saveCallUnlinked(activeSessionId, false);
+              setPickedPatient(id);
+            }
             if (!res.context.patient) setShowPatientPicker(true);
           }
         })
         .catch(() => undefined);
     };
-    const timer = window.setInterval(refresh, 2000);
+    const timer = window.setInterval(refresh, 5000);
     const onVisible = () => {
       if (!document.hidden) refresh();
     };
@@ -600,7 +693,12 @@ export default function BrowserCall({
     let active = true;
     const refresh = () => {
       if (!active || document.hidden) return;
-      carePortalContext(activeSessionId, pairRef.current)
+      carePortalContext(
+        activeSessionId,
+        pairRef.current,
+        unlinkedRef.current ? null : selectedPatientRef.current,
+        unlinkedRef.current
+      )
         .then((res) => {
           if (active) setContext(res.context);
         })
@@ -658,7 +756,12 @@ export default function BrowserCall({
 
     // Always ask the portal brain: with a linked patient it briefs on their
     // history, without one it reports whatever the device is streaming now.
-    const opening = carePortalBrief(activeSessionId, pairRef.current)
+    const opening = carePortalBrief(
+      activeSessionId,
+      pairRef.current,
+      selectedPatientRef.current,
+      unlinkedRef.current
+    )
       .then((res) => res.brief.line || `Hi, this is the CareSpeak assistant. ${liveSummary(context)}`)
       .catch(() => `Hi, this is the CareSpeak assistant. ${liveSummary(context)}`);
 
@@ -730,7 +833,12 @@ export default function BrowserCall({
     setSbarLoading(true);
     setSbarError(null);
     try {
-      const res = await carePortalSbar(activeSessionId, pairRef.current);
+      const res = await carePortalSbar(
+        activeSessionId,
+        pairRef.current,
+        selectedPatientRef.current,
+        unlinkedRef.current
+      );
       setSbar(res.sbar);
     } catch (err) {
       setSbarError(err instanceof CareApiError ? err.message : "Could not build the handoff.");
@@ -808,7 +916,12 @@ export default function BrowserCall({
       setTurns([]);
       setFollowUps([]);
       setSbar(null);
-      setPickedPatient(res.context.link?.patientId ?? pickedPatient);
+      const id = res.context.patient?.id ?? res.context.link?.patientId ?? pickedPatient;
+      selectedPatientRef.current = id;
+      unlinkedRef.current = false;
+      saveCallPatient(activeSessionId, id);
+      saveCallUnlinked(activeSessionId, false);
+      setPickedPatient(id);
     } catch (err) {
       setLinkError(err instanceof CareApiError ? err.message : "Could not link the patient.");
     } finally {
@@ -823,6 +936,10 @@ export default function BrowserCall({
     try {
       const res = await carePortalUnlink(activeSessionId, pairRef.current);
       setContext(res.context);
+      selectedPatientRef.current = null;
+      unlinkedRef.current = true;
+      saveCallPatient(activeSessionId, null);
+      saveCallUnlinked(activeSessionId, true);
       setPickedPatient("");
       setTurns([]);
       setFollowUps([]);
@@ -849,6 +966,10 @@ export default function BrowserCall({
         // link it straight away
         const linked = await carePortalLink(activeSessionId, created.id, pairRef.current);
         setContext(linked.context);
+        selectedPatientRef.current = created.id;
+        unlinkedRef.current = false;
+        saveCallPatient(activeSessionId, created.id);
+        saveCallUnlinked(activeSessionId, false);
         setPickedPatient(created.id);
         setTurns([]);
         setFollowUps([]);
@@ -874,9 +995,18 @@ export default function BrowserCall({
       try {
         await careDeletePatient(id);
         // refresh context
-        const res = await carePortalContext(activeSessionId, pairRef.current);
+        const res = await carePortalContext(
+          activeSessionId,
+          pairRef.current,
+          selectedPatientRef.current === id ? null : selectedPatientRef.current,
+          unlinkedRef.current
+        );
         setContext(res.context);
-        if (pickedPatient === id) setPickedPatient("");
+        if (pickedPatient === id || selectedPatientRef.current === id) {
+          selectedPatientRef.current = null;
+          saveCallPatient(activeSessionId, null);
+          setPickedPatient("");
+        }
       } catch (err) {
         setLinkError(err instanceof CareApiError ? err.message : "Could not remove the patient.");
       } finally {

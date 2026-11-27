@@ -489,9 +489,16 @@ export interface PortalAlert {
   findings: PortalSignalFinding[];
 }
 
-export async function carePortalContext(session: string, pair?: string | null) {
+export async function carePortalContext(
+  session: string,
+  pair?: string | null,
+  patientId?: string | null,
+  unlinked = false
+) {
   const qs = new URLSearchParams({ session });
   if (pair) qs.set("pair", pair);
+  if (patientId) qs.set("patientId", patientId);
+  if (unlinked) qs.set("unlinked", "1");
   return request<{ context: PortalContext }>(`/api/care/portal?${qs.toString()}`);
 }
 
@@ -517,6 +524,8 @@ export async function carePortalAsk(
     voice?: boolean;
     detail?: PortalDetail;
     history?: PortalChatTurn[];
+    patientId?: string | null;
+    unlinked?: boolean;
   } = {}
 ) {
   return request<{ result: PortalAnswer }>("/api/care/portal", {
@@ -529,14 +538,27 @@ export async function carePortalAsk(
       voice: opts.voice,
       detail: opts.detail,
       history: opts.history,
+      patientId: opts.patientId ?? undefined,
+      unlinked: opts.unlinked || undefined,
     }),
   });
 }
 
-export async function carePortalSbar(session: string, pair?: string | null) {
+export async function carePortalSbar(
+  session: string,
+  pair?: string | null,
+  patientId?: string | null,
+  unlinked = false
+) {
   return request<{ sbar: PortalSbar }>("/api/care/portal", {
     method: "POST",
-    body: JSON.stringify({ session, pair: pair ?? undefined, action: "sbar" }),
+    body: JSON.stringify({
+      session,
+      pair: pair ?? undefined,
+      action: "sbar",
+      patientId: patientId ?? undefined,
+      unlinked: unlinked || undefined,
+    }),
   });
 }
 
@@ -547,10 +569,21 @@ export async function carePortalAlert(session: string, pair?: string | null, for
   });
 }
 
-export async function carePortalBrief(session: string, pair?: string | null) {
+export async function carePortalBrief(
+  session: string,
+  pair?: string | null,
+  patientId?: string | null,
+  unlinked = false
+) {
   return request<{ brief: { line: string; engine: "gemini" | "rules"; model: string } }>("/api/care/portal", {
     method: "POST",
-    body: JSON.stringify({ session, pair: pair ?? undefined, action: "brief" }),
+    body: JSON.stringify({
+      session,
+      pair: pair ?? undefined,
+      action: "brief",
+      patientId: patientId ?? undefined,
+      unlinked: unlinked || undefined,
+    }),
   });
 }
 

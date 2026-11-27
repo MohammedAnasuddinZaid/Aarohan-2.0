@@ -620,7 +620,10 @@ function suggestionsFor(
   return [...new Set(out)].slice(0, 6);
 }
 
-export async function buildPortalContext(sessionId: string): Promise<PortalContext> {
+export async function buildPortalContext(
+  sessionId: string,
+  options: { patientId?: string | null; ignoreLink?: boolean } = {}
+): Promise<PortalContext> {
   const store = await getSessionStore();
   const d = await getDriver();
   // Live metrics, pairing and link records are keyed by uppercase session id
@@ -659,6 +662,29 @@ export async function buildPortalContext(sessionId: string): Promise<PortalConte
         linkedBy: "auto",
       };
       void linkSessionToPatient(scope, realPatients[0].id, "auto").catch(() => undefined);
+    }
+  }
+
+  // An explicit "remove patient" is remembered by the phone too, so a failed
+  // unlink write cannot make the old patient reappear on the next poll.
+  if (options.ignoreLink) link = null;
+
+  // The browser call keeps the patient it selected in local storage and sends
+  // it with every request. That makes the call robust when the shared store is
+  // momentarily read-only (Upstash quota) or the request lands on an instance
+  // that did not see the link write. It also lets a phone recover its selection
+  // after a refresh without a second round-trip to the nurse portal.
+  const overrideId = options.patientId?.trim();
+  if (overrideId) {
+    const overridePatient =
+      patients.find((p) => p.id === overrideId) ?? (await getPatient(overrideId).catch(() => null));
+    if (overridePatient) {
+      link = {
+        sessionId: scope,
+        patientId: overridePatient.id,
+        linkedAt: new Date().toISOString(),
+        linkedBy: "client",
+      };
     }
   }
 
@@ -886,8 +912,11 @@ export function buildSbar(ctx: PortalContext, records: PatientRecord[] = []): Po
   };
 }
 
-export async function sbarPortal(sessionId: string): Promise<PortalSbar | null> {
-  const ctx = await buildPortalContext(sessionId);
+export async function sbarPortal(
+  sessionId: string,
+  options: { patientId?: string | null; ignoreLink?: boolean } = {}
+): Promise<PortalSbar | null> {
+  const ctx = await buildPortalContext(sessionId, options);
   if (!ctx.patient) return null;
   const records = await listRecords(ctx.patient.id);
   return buildSbar(ctx, records);
@@ -1170,7 +1199,13 @@ function localEvidenceAnswer(
 export async function askPortal(
   sessionId: string,
   rawQuestion: string,
-  opts: { voice?: boolean; detail?: PortalDetail; history?: Array<{ role?: string; text?: string }> } = {}
+  opts: {
+    voice?: boolean;
+    detail?: PortalDetail;
+    history?: Array<{ role?: string; text?: string }>;
+    patientId?: string | null;
+    ignoreLink?: boolean;
+  } = {}
 ): Promise<PortalAnswer & { patientId: string | null }> {
   const detail: PortalDetail =
     opts.detail === "brief" || opts.detail === "deep" ? opts.detail : "standard";
@@ -1184,7 +1219,10 @@ export async function askPortal(
     .slice(-8);
 
   const question = rawQuestion.trim().slice(0, 1000);
-  const ctx = await buildPortalContext(sessionId);
+  const ctx = await buildPortalContext(sessionId, {
+    patientId: opts.patientId,
+    ignoreLink: opts.ignoreLink,
+  });
   const followUps = suggestionsFor(
     ctx.patient,
     ctx.findings,
@@ -1660,9 +1698,12 @@ export function rulesAlertLine(patient: ClinicalPatient | null, findings: Signal
  */
 export async function alertPortal(
   sessionId: string,
-  opts: { force?: boolean } = {}
+  opts: { force?: boolean; patientId?: string | null; ignoreLink?: boolean } = {}
 ): Promise<PortalAlert> {
-  const ctx = await buildPortalContext(sessionId);
+  const ctx = await buildPortalContext(sessionId, {
+    patientId: opts.patientId,
+    ignoreLink: opts.ignoreLink,
+  });
   if (!ctx.findings.length) {
     return { line: "", severity: "ok", engine: "rules", model: "rules", cached: false, findings: [] };
   }
@@ -1706,8 +1747,11 @@ export async function alertPortal(
 }
 
 /** The line spoken when the portal opens, before the nurse asks anything. */
-export async function portalBriefing(sessionId: string): Promise<{ line: string; engine: Engine; model: string }> {
-  const ctx = await buildPortalContext(sessionId);
+export async function portalBriefing(
+  sessionId: string,
+  options: { patientId?: string | null; ignoreLink?: boolean } = {}
+): Promise<{ line: string; engine: Engine; model: string }> {
+  const ctx = await buildPortalContext(sessionId, options);
   if (!ctx.patient) {
     const liveParts: string[] = [];
     if (ctx.metrics?.alertnessScore != null) liveParts.push(`alertness ${Math.round(ctx.metrics.alertnessScore)}%`);
