@@ -40,6 +40,9 @@ export async function authorizeSession(
       actor: { role: nurse.role, userId: nurse.userId, displayName: nurse.displayName },
     };
   }
+  // Demo mode: allow the browser call / portal to work with just a session id,
+  // so the hackathon demo runs without a nurse login or QR scan.
+  if (!isStrictSecurity()) return { allowed: true };
   if (pair && (await verifyPairTokenPersistent(session, pair))) return { allowed: true };
   return { allowed: false };
 }
