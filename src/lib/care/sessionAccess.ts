@@ -1,6 +1,5 @@
 import type { NextRequest } from "next/server";
 import { nurseFromRequest } from "./auth";
-import { isStrictSecurity } from "./securityMode";
 import {
   hasRegistrationPersistent,
   verifyPairTokenPersistent,
@@ -30,11 +29,13 @@ export async function authorizeSession(
       actor: { role: nurse.role, userId: nurse.userId, displayName: nurse.displayName },
     };
   }
-  // Demo mode: allow unregistered beds (demo consoles / hackathon sessions)
-  // to work without a nurse login or QR scan, so the browser call and portal
-  // run out of the box. Only endpoints that opt in (e.g. the portal) get this;
-  // security-sensitive endpoints (phone/qr, notify) keep requiring proof.
-  if (!isStrictSecurity() && options.allowDemoUnregistered) {
+  // The portal (browser call) opts in: it must keep working for a demo session
+  // even on a hosted deployment where the Upstash quota is exhausted, because
+  // registration writes can no longer persist across serverless instances. Only
+  // the portal passes allowDemoUnregistered; phone/qr, notify, sync and ingest
+  // remain proof-gated on their own. An unregistered session id is treated as
+  // an open demo bed; a registered one still requires its pair token or a nurse.
+  if (options.allowDemoUnregistered) {
     const registered = await hasRegistrationPersistent(session);
     if (!registered) return { allowed: true };
   }
