@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
   const session = normalizeSession(url.searchParams.get("session"));
   if (!session) return fail("A valid session id is required.", 400);
 
-  const access = await authorizeSession(req, session, url.searchParams.get("pair"));
+  const access = await authorizeSession(req, session, url.searchParams.get("pair"), { allowDemoUnregistered: true });
   if (!access.allowed) return fail("Scan the patient's QR code, or sign in, to use the assistant.", 401);
 
   return ok({ context: await buildPortalContext(session) });
@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
   const session = normalizeSession(body?.session);
   if (!session) return fail("A valid session id is required.", 400);
 
-  const access = await authorizeSession(req, session, body?.pair);
+  const access = await authorizeSession(req, session, body?.pair, { allowDemoUnregistered: true });
   if (!access.allowed) return fail("Scan the patient's QR code, or sign in, to use the assistant.", 401);
 
   const action = (body?.action ?? "context").trim();

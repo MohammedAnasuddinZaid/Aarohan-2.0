@@ -1,14 +1,3 @@
-/**
- * Shared authorisation for session-scoped care endpoints (the nurse portal and
- * the emergency/demo call trigger). Server-only.
- *
- * Layered, weakest-to-strongest:
- *   1. a signed-in nurse cookie always works;
- *   2. a valid `pair` token from the patient's QR proves the caller scanned it.
- *
- * Note: a session id alone is NOT a capability. Pair tokens must be persisted in
- * the shared store so they survive instance recycling.
- */
 import type { NextRequest } from "next/server";
 import { nurseFromRequest } from "./auth";
 import { isStrictSecurity } from "./securityMode";
@@ -31,7 +20,8 @@ export interface SessionAccess {
 export async function authorizeSession(
   req: NextRequest,
   session: string,
-  pair?: string | null
+  pair?: string | null,
+  options: { allowDemoUnregistered?: boolean } = {}
 ): Promise<SessionAccess> {
   const nurse = await nurseFromRequest(req);
   if (nurse) {
@@ -40,9 +30,14 @@ export async function authorizeSession(
       actor: { role: nurse.role, userId: nurse.userId, displayName: nurse.displayName },
     };
   }
-  // Demo mode: allow the browser call / portal to work with just a session id,
-  // so the hackathon demo runs without a nurse login or QR scan.
-  if (!isStrictSecurity()) return { allowed: true };
+  // Demo mode: allow unregistered beds (demo consoles / hackathon sessions)
+  // to work without a nurse login or QR scan, so the browser call and portal
+  // run out of the box. Only endpoints that opt in (e.g. the portal) get this;
+  // security-sensitive endpoints (phone/qr, notify) keep requiring proof.
+  if (!isStrictSecurity() && options.allowDemoUnregistered) {
+    const registered = await hasRegistrationPersistent(session);
+    if (!registered) return { allowed: true };
+  }
   if (pair && (await verifyPairTokenPersistent(session, pair))) return { allowed: true };
   return { allowed: false };
 }
@@ -89,12 +84,20 @@ export async function authorizeSyncSession(
     registered = await hasRegistrationPersistent(key);
     remember(registrationCache, key, { at: now, registered });
   }
-  if (!registered && !options.requireProof) return { allowed: true };
-  if (!registered) return authorizeSession(req, key, pair ?? null);
-
-  // Demo mode: allow access without a pair token for hackathon demonstration.
-  // In strict mode, a registered bed requires proof (pair token or nurse login).
-  if (!isStrictSecurity() && !pair) return { allowed: true };
+  if (!registered) {
+    if (options?.requireProof) {
+      const nurse = await nurseFromRequest(req);
+      if (nurse) {
+        return {
+          allowed: true,
+          actor: { role: nurse.role, userId: nurse.userId, displayName: nurse.displayName },
+        };
+      }
+      if (pair && (await verifyPairTokenPersistent(key, pair))) return { allowed: true };
+      return { allowed: false };
+    }
+    return { allowed: true };
+  }
 
   if (!pair) return authorizeSession(req, key, null);
 
