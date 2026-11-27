@@ -945,8 +945,12 @@ export async function linkSessionToPatient(
     linkedBy,
   };
   const d = await getDriver();
-  await d.setDoc(K.sessionLink(key), link);
-  await d.del(K.sessionUnlinked(key));
+  try {
+    await d.setDoc(K.sessionLink(key), link);
+    await d.del(K.sessionUnlinked(key));
+  } catch {
+    // Storage (e.g. exhausted Redis) must not break the calling flow.
+  }
   return link;
 }
 
@@ -957,7 +961,11 @@ export async function getSessionLink(sessionId: string): Promise<SessionPatientL
 
 export async function unlinkSessionPatient(sessionId: string): Promise<void> {
   const key = sessionKey(sessionId);
-  const d = await getDriver();
-  await d.del(K.sessionLink(key));
-  await d.setDoc(K.sessionUnlinked(key), true);
+  try {
+    const d = await getDriver();
+    await d.del(K.sessionLink(key));
+    await d.setDoc(K.sessionUnlinked(key), true);
+  } catch {
+    // Storage (e.g. exhausted Redis) must not break the calling flow.
+  }
 }

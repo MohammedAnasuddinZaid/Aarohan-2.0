@@ -673,7 +673,7 @@ export async function buildPortalContext(sessionId: string): Promise<PortalConte
     resolvedLink = null;
     void unlinkSessionPatient(scope).catch(() => undefined);
   }
-  const records = resolvedLink ? await listRecords(resolvedLink.patientId) : [];
+  const records = resolvedLink ? await listRecords(resolvedLink.patientId).catch(() => []) : [];
 
   return {
     sessionId: scope,

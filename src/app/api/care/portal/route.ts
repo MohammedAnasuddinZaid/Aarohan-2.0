@@ -122,29 +122,37 @@ export async function POST(req: NextRequest) {
       const patient = await getPatient(patientId);
       if (!patient) return fail("Patient not found.", 404);
 
-      const link = await linkPortalSession(session, patientId, access.actor?.displayName);
-      if (!link) return fail("Patient not found.", 404);
+      try {
+        const link = await linkPortalSession(session, patientId, access.actor?.displayName);
+        if (!link) return fail("Patient not found.", 404);
 
-      await appendAudit({
-        actorRole: access.actor?.role ?? "nurse",
-        actorId: access.actor?.userId,
-        action: "care.session_linked",
-        sessionId: session,
-        patientId,
-        detail: { via: "nurse-portal" },
-      });
+        await appendAudit({
+          actorRole: access.actor?.role ?? "nurse",
+          actorId: access.actor?.userId,
+          action: "care.session_linked",
+          sessionId: session,
+          patientId,
+          detail: { via: "nurse-portal" },
+        }).catch(() => undefined);
 
-      return ok({ link, context: await buildPortalContext(session) });
+        return ok({ link, context: await buildPortalContext(session) });
+      } catch {
+        return ok({ link: null, context: await buildPortalContext(session).catch(() => null) });
+      }
     }
 
     case "unlink": {
-      await unlinkPortalSession(session);
-      await appendAudit({
-        actorRole: access.actor?.role ?? "nurse",
-        actorId: access.actor?.userId,
-        action: "care.session_unlinked",
-        sessionId: session,
-      });
+      try {
+        await unlinkPortalSession(session);
+        await appendAudit({
+          actorRole: access.actor?.role ?? "nurse",
+          actorId: access.actor?.userId,
+          action: "care.session_unlinked",
+          sessionId: session,
+        }).catch(() => undefined);
+      } catch {
+        // ignore storage errors
+      }
       return ok({ context: await buildPortalContext(session) });
     }
 
