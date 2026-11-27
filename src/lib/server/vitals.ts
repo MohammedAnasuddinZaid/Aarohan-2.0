@@ -11,6 +11,8 @@ export interface RawVitals {
   batteryPct?: number;
   rssi?: number;
   sosActive?: boolean;
+  /** Sensor contact flag from the wearable; false must clear HR/SpO2 on screen. */
+  finger?: boolean;
 }
 
 export interface SanitizedVitals {
@@ -20,6 +22,7 @@ export interface SanitizedVitals {
   batteryPct?: number;
   rssi?: number;
   sosActive: boolean;
+  finger?: boolean;
 }
 
 function clampRange(n: unknown, min: number, max: number): number | undefined {
@@ -53,5 +56,6 @@ export function sanitizeVitals(v: RawVitals | null | undefined): SanitizedVitals
     batteryPct: clampRange(v.batteryPct, LIMITS.batteryPct.min, LIMITS.batteryPct.max),
     rssi: typeof v.rssi === "number" && Number.isFinite(v.rssi) ? v.rssi : undefined,
     sosActive: !!v.sosActive,
+    finger: typeof v.finger === "boolean" ? v.finger : undefined,
   };
 }

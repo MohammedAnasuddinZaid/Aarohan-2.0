@@ -53,6 +53,8 @@ export interface DeviceVitals {
   sosActive?: boolean;
   batteryPct?: number;
   rssi?: number;
+  /** true while a finger is on the sensor; false clears HR/SpO2 in the UI */
+  finger?: boolean;
   receivedAt: number;
 }
 

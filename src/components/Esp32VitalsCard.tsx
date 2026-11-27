@@ -11,9 +11,17 @@ interface Esp32VitalsCardProps {
 }
 
 export default function Esp32VitalsCard({ vitals, deviceName = "ESP32 Wearable" }: Esp32VitalsCardProps) {
-  const stale = vitals ? Date.now() - vitals.receivedAt > 15000 : true;
+  const stale = vitals ? Date.now() - vitals.receivedAt > 30000 : true;
   const online = !!vitals && !stale;
-  const fingerOn = vitals ? (vitals.heartRate != null || vitals.spo2 != null) : false;
+  // The wearable reports contact explicitly. Never show a reading after the
+  // finger is lifted, and never show values while the device is offline.
+  const fingerOn = vitals
+    ? vitals.finger === true ||
+      (vitals.finger !== false && (vitals.heartRate != null || vitals.spo2 != null))
+    : false;
+  const liveFinger = online && fingerOn;
+  const hr = liveFinger ? vitals?.heartRate : undefined;
+  const spo2 = liveFinger ? vitals?.spo2 : undefined;
 
   const rssiQuality = (rssi: number | undefined) => {
     if (rssi == null) return { label: "—", color: "text-[#9ca3af]" };
@@ -56,17 +64,17 @@ export default function Esp32VitalsCard({ vitals, deviceName = "ESP32 Wearable" 
         <>
           {/* Main vitals grid */}
           <div className="grid grid-cols-2 gap-3 mb-4">
-            <div className={`rounded-xl p-4 text-center ${fingerOn && vitals.heartRate ? "bg-[#fef2f2]" : "bg-[#f5f5f5]"}`}>
+            <div className={`rounded-xl p-4 text-center ${hr != null ? "bg-[#fef2f2]" : "bg-[#f5f5f5]"}`}>
               <p className="text-[10px] text-[#6e6e6e] uppercase tracking-wider mb-1">Heart Rate</p>
-              <p className={`text-3xl font-extrabold ${fingerOn && vitals.heartRate ? "text-[#d94a4a]" : "text-[#9ca3af]"}`}>
-                {vitals.heartRate != null ? Math.round(vitals.heartRate) : "—"}
+              <p className={`text-3xl font-extrabold ${hr != null ? "text-[#d94a4a]" : "text-[#9ca3af]"}`}>
+                {hr != null ? Math.round(hr) : "—"}
               </p>
               <p className="text-[10px] text-[#9ca3af] mt-1">BPM</p>
             </div>
-            <div className={`rounded-xl p-4 text-center ${fingerOn && vitals.spo2 ? "bg-[#eff6ff]" : "bg-[#f5f5f5]"}`}>
+            <div className={`rounded-xl p-4 text-center ${spo2 != null ? "bg-[#eff6ff]" : "bg-[#f5f5f5]"}`}>
               <p className="text-[10px] text-[#6e6e6e] uppercase tracking-wider mb-1">SpO₂</p>
-              <p className={`text-3xl font-extrabold ${fingerOn && vitals.spo2 ? "text-[#3b82f6]" : "text-[#9ca3af]"}`}>
-                {vitals.spo2 != null ? Math.round(vitals.spo2) : "—"}
+              <p className={`text-3xl font-extrabold ${spo2 != null ? "text-[#3b82f6]" : "text-[#9ca3af]"}`}>
+                {spo2 != null ? Math.round(spo2) : "—"}
               </p>
               <p className="text-[10px] text-[#9ca3af] mt-1">%</p>
             </div>
@@ -101,13 +109,13 @@ export default function Esp32VitalsCard({ vitals, deviceName = "ESP32 Wearable" 
             <span>
               {stale
                 ? "⚠ No data for " + Math.round((Date.now() - vitals.receivedAt) / 1000) + "s"
-                : fingerOn
+                : liveFinger
                 ? "Finger detected"
                 : "No finger — place on sensor"}
             </span>
           </div>
 
-          {!fingerOn && online && (
+          {!liveFinger && online && (
             <motion.div
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}

@@ -31,36 +31,53 @@
  */
 
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include "BluetoothSerial.h"
 #include <Wire.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
 #include <esp_timer.h>
 #include <esp_system.h>
+#include <esp_wifi.h>
 #include "MAX30105.h"
 #include "heartRate.h"
+#include "spo2_algorithm.h"
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  1. USER CONFIGURATION — edit only this block
 // ═════════════════════════════════════════════════════════════════════════════
-constexpr char FW_VERSION[] = "2.2.0";
+constexpr char FW_VERSION[] = "3.1.0";
 
 // Wi-Fi credentials: the firmware tries each in order until one connects.
-// Add your phone hotspot here (name + password) before the demo.
+// Only 2.4 GHz networks are visible to the ESP32. The USB serial bridge works
+// even if every entry here fails (see tools/serial-bridge.ps1).
 struct WifiCred { const char* ssid; const char* pass; };
 static const WifiCred WIFI_CREDS[] = {
+  // Home / demo Wi-Fi
   { "Anas", "osssa1920" },
-  { "Anas 5G", "osssa1920" },
+  // Known venue networks (passwords copied from this laptop's saved profiles)
+  { "Aarohan 8", "Pragnya@6844" },
+  { "HACKATHON_3", "03042026" },
+  { "FSWxSIH 5", "fsw@4664" },
+  { "NRCM IT PARK 2.4G", "CODE@5454" },
+  // Phone hotspots
   { "Mohdanasuddinzaid's A15", "ossa1920" },
   { "M0hdanasuddinzaid's A15", "ossa1920" },
-  // Add your demo hotspot below:
-  // { "YourHotspotName", "YourHotspotPassword" },
+  // Laptop-hosted hotspot (tools/hotspot.ps1) — zero-infrastructure fallback
+  { "CareSpeak-Demo", "carespeak2026" },
 };
 static const uint8_t WIFI_CRED_COUNT = sizeof(WIFI_CREDS) / sizeof(WIFI_CREDS[0]);
 
 // Server: auto-discover on local network. Set to a fixed URL to skip discovery.
 constexpr char SERVER_URL_OVERRIDE[] = "";
+
+// UDP broadcast discovery: tools/demo-runtime.mjs answers "CARESPEAK:<ip>".
+constexpr uint16_t DISCOVERY_PORT       = 41234;
+constexpr uint16_t DISCOVERY_LOCAL_PORT = 41235;
+constexpr uint32_t REDISCOVER_AFTER_MS  = 30000;   // no successful POST -> rescan
+constexpr wifi_power_t WIFI_TX_POWER    = WIFI_POWER_15dBm;  // lower peak current on battery
 
 // Server URL: mutable, set during discovery or from override.
 char SERVER_URL[128] = "";
@@ -81,6 +98,7 @@ constexpr uint8_t PIN_BATTERY    = 34;    // only used when ENABLE_BATTERY == 1
 #define ENABLE_WIFI_SCAN 0   // set 1 only for one-off Wi-Fi debugging
 #define DEBUG_SENSOR     1   // 1 = print raw red/IR once a second
 #define ENABLE_SOS_BUTTON 0  // set 1 when a push button is wired to GPIO27->GND
+#define ENABLE_BT_SERIAL 1   // Bluetooth Classic SPP -> virtual COM port on the laptop
 
 // Timing (milliseconds)
 constexpr uint32_t POST_INTERVAL_MS       = 5000;   // 5 s: live dashboard, small packet
@@ -92,14 +110,20 @@ constexpr uint32_t WIFI_CONNECT_TIMEOUT   = 15000;
 constexpr uint32_t SENSOR_RETRY_MS        = 10000;
 constexpr uint32_t HTTP_TIMEOUT_MS        = 6000;
 constexpr uint32_t HTTP_CONNECT_TIMEOUT_MS = 4000;
-constexpr uint32_t NET_RECOVERY_MS        = 60000;  // no successful POST for 60 s -> force Wi-Fi reconnect
-constexpr uint32_t REBOOT_AFTER_MS        = 180000; // still no POST after 3 min -> full restart
+constexpr uint32_t NET_RECOVERY_MS        = 90000;  // no successful POST for 90 s -> force Wi-Fi reconnect
+constexpr uint32_t REBOOT_AFTER_MS        = 300000; // still no POST after 5 min -> full restart
 constexpr uint32_t LOOP_STALL_MS          = 45000;  // hardware-timer watchdog: loop stuck -> restart
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  2. LOGGING
 // ═════════════════════════════════════════════════════════════════════════════
 #define LOG(fmt, ...) Serial.printf("[%8lu] " fmt, static_cast<unsigned long>(millis()), ##__VA_ARGS__)
+
+#if ENABLE_BT_SERIAL
+// Windows exposes a paired Bluetooth Classic SPP device as a virtual COM port,
+// so tools/serial-bridge.ps1 can forward these packets with no Wi-Fi at all.
+BluetoothSerial SerialBT;
+#endif
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  3. STATE
@@ -110,6 +134,9 @@ static WifiState wifiState        = WifiState::Idle;
 static uint32_t wifiStartedAt     = 0;
 static uint32_t wifiNextAttemptAt = 0;
 static uint8_t  wifiBackoffStep   = 0;
+static bool     wifiManuallyDisabled = false;
+static bool     wifiPausedForBt    = false;  // Bluetooth client active -> radio shared
+static uint32_t lastWifiRecycleAt = 0;
 
 static bool     sensorReady        = false;
 static uint32_t lastSensorAttempt  = 0;
@@ -152,6 +179,21 @@ static int     spo2Value           = 0;
 static bool     fingerPresent      = false;
 static bool     sensorCleared      = true;
 static uint32_t fingerLostAt       = 0;
+
+// Maxim reference algorithm — 100 samples at 25 Hz = 4 s window.
+// This is the same algorithm used by the sensor vendor's reference design and
+// is far more reliable than a fixed-threshold beat detector.
+static uint32_t maximIr[100];
+static uint32_t maximRed[100];
+static uint32_t maximIrCopy[100];
+static uint32_t maximRedCopy[100];
+static uint16_t maximPos           = 0;
+static uint16_t maximFilled        = 0;
+static uint32_t lastMaximCalc      = 0;
+static int32_t  maximHr            = 0;
+static int32_t  maximSpo2          = 0;
+static int8_t   maximHrValid       = 0;
+static int8_t   maximSpo2Valid     = 0;
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  4. SMALL HELPERS
@@ -239,23 +281,42 @@ static void discoverServer();  // forward declaration
 static void wifiStart(uint32_t now);  // forward declaration
 
 static void wifiStart(uint32_t now) {
-  LOG("Wi-Fi: trying known networks...\n");
+  if (wifiManuallyDisabled || wifiPausedForBt) return;
+
+  LOG("Wi-Fi: scanning for known networks...\n");
 
   WiFi.persistent(false);
-  WiFi.disconnect(true);
-  delay(100);
+  WiFi.disconnect(true, false);
+  delay(50);
   WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-#ifdef ESP32
   WiFi.setSleep(false);
-#endif
+  WiFi.setAutoReconnect(true);
+  WiFi.setHostname("carespeak-esp32");
+  WiFi.setTxPower(WIFI_TX_POWER);
+
+  int found = WiFi.scanNetworks();
+  if (found < 0) found = 0;
+  LOG("Wi-Fi: %d networks visible\n", found);
 
   bool connected = false;
   for (uint8_t c = 0; c < WIFI_CRED_COUNT && !connected; ++c) {
-    LOG("Wi-Fi: trying \"%s\"...\n", WIFI_CREDS[c].ssid);
+    bool visible = false;
+    int bestRssi = -127;
+    for (int i = 0; i < found; ++i) {
+      if (WiFi.SSID(i).equalsIgnoreCase(WIFI_CREDS[c].ssid)) {
+        visible = true;
+        if (WiFi.RSSI(i) > bestRssi) bestRssi = WiFi.RSSI(i);
+      }
+    }
+    if (!visible) {
+      LOG("Wi-Fi: \"%s\" not visible, skipping\n", WIFI_CREDS[c].ssid);
+      continue;
+    }
+
+    LOG("Wi-Fi: \"%s\" visible (%d dBm), connecting...\n", WIFI_CREDS[c].ssid, bestRssi);
     WiFi.begin(WIFI_CREDS[c].ssid, WIFI_CREDS[c].pass);
     uint32_t start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < 8000) {
+    while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_CONNECT_TIMEOUT) {
       delay(100);
       loopHeartbeatMs = millis();
     }
@@ -264,52 +325,39 @@ static void wifiStart(uint32_t now) {
       LOG("Wi-Fi: connected to \"%s\", IP %s, RSSI %d dBm\n",
           WIFI_CREDS[c].ssid, WiFi.localIP().toString().c_str(), WiFi.RSSI());
     } else {
-      LOG("Wi-Fi: \"%s\" not available\n", WIFI_CREDS[c].ssid);
-      WiFi.disconnect(true);
+      LOG("Wi-Fi: \"%s\" failed (status %d)\n", WIFI_CREDS[c].ssid, WiFi.status());
+      WiFi.disconnect(true, false);
       delay(100);
     }
   }
 
+  // Open venue network as a last resort (no password).
   if (!connected) {
-    LOG("Wi-Fi: scanning for networks...\n");
-    int found = WiFi.scanNetworks();
-    LOG("Wi-Fi: %d networks visible\n", found);
     for (int i = 0; i < found && !connected; ++i) {
+      if (WiFi.encryptionType(i) != WIFI_AUTH_OPEN) continue;
       String ssid = WiFi.SSID(i);
-      for (uint8_t c = 0; c < WIFI_CRED_COUNT && !connected; ++c) {
-        if (ssid.equalsIgnoreCase(WIFI_CREDS[c].ssid)) {
-          LOG("Wi-Fi: found \"%s\", connecting...\n", ssid.c_str());
-          WiFi.begin(WIFI_CREDS[c].ssid, WIFI_CREDS[c].pass);
-          uint32_t s = millis();
-          while (WiFi.status() != WL_CONNECTED && millis() - s < 8000) {
-            delay(100);
-            loopHeartbeatMs = millis();
-          }
-          if (WiFi.status() == WL_CONNECTED) {
-            connected = true;
-            LOG("Wi-Fi: connected to \"%s\"\n", ssid.c_str());
-          }
-        }
+      if (ssid.length() == 0) continue;
+      LOG("Wi-Fi: trying open network \"%s\"...\n", ssid.c_str());
+      WiFi.begin(ssid.c_str());
+      uint32_t start = millis();
+      while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+        delay(100);
+        loopHeartbeatMs = millis();
       }
-      if (!connected && WiFi.encryptionType(i) == WIFI_AUTH_OPEN) {
-        LOG("Wi-Fi: trying open network \"%s\"...\n", ssid.c_str());
-        WiFi.begin(ssid.c_str());
-        uint32_t s = millis();
-        while (WiFi.status() != WL_CONNECTED && millis() - s < 8000) {
-          delay(100);
-          loopHeartbeatMs = millis();
-        }
-        if (WiFi.status() == WL_CONNECTED) {
-          connected = true;
-          LOG("Wi-Fi: connected to open network \"%s\"\n", ssid.c_str());
-        }
+      if (WiFi.status() == WL_CONNECTED) {
+        connected = true;
+        LOG("Wi-Fi: connected to open network \"%s\", IP %s\n",
+            ssid.c_str(), WiFi.localIP().toString().c_str());
+      } else {
+        WiFi.disconnect(true, false);
       }
     }
-    WiFi.scanDelete();
   }
 
+  WiFi.scanDelete();
+
   if (!connected) {
-    LOG("Wi-Fi: no network found, will retry in 10s\n");
+    LOG("Wi-Fi: no usable network found, retrying in 10 s\n");
     wifiState = WifiState::Idle;
     wifiNextAttemptAt = now + 10000;
     return;
@@ -318,7 +366,89 @@ static void wifiStart(uint32_t now) {
   wifiState = WifiState::Connected;
   wifiBackoffStep = 0;
   lastVitalsPost = now - POST_INTERVAL_MS + 1000UL;
+  lastNetRecoveryAt = now;
   discoverServer();
+}
+
+// Parse "scheme://host:port/path" and TCP-probe it. Used to reject a URL
+// saved in EEPROM when the laptop's DHCP address has changed.
+static bool urlReachable(const char* url) {
+  if (strstr(url, "vercel.app") != nullptr) return false;  // never use the cloud fallback
+  const char* p = strstr(url, "://");
+  if (p == nullptr) return false;
+  p += 3;
+
+  const char* slash = strchr(p, '/');
+  const char* colon = strchr(p, ':');
+  int port = 80;
+  if (strncmp(url, "https", 5) == 0) port = 443;
+
+  size_t hostLen = slash != nullptr ? static_cast<size_t>(slash - p) : strlen(p);
+  if (colon != nullptr && (slash == nullptr || colon < slash)) {
+    hostLen = static_cast<size_t>(colon - p);
+    port = atoi(colon + 1);
+  }
+  if (hostLen == 0 || hostLen >= 64) return false;
+
+  char host[64];
+  memcpy(host, p, hostLen);
+  host[hostLen] = '\0';
+
+  WiFiClient probe;
+  const bool ok = probe.connect(host, port, 1500);
+  probe.stop();
+  return ok;
+}
+
+// UDP broadcast discovery: tools/demo-runtime.mjs answers "CARESPEAK:<ip>".
+// This survives DHCP changes and is much faster than scanning 254 addresses.
+static bool udpDiscover() {
+  WiFiUDP udp;
+  if (!udp.begin(DISCOVERY_LOCAL_PORT)) {
+    LOG("Server: UDP begin failed\n");
+    return false;
+  }
+
+  IPAddress subnet = WiFi.localIP();
+  subnet[3] = 255;
+  const IPAddress global(255, 255, 255, 255);
+
+  bool found = false;
+  for (uint8_t attempt = 0; attempt < 3 && !found; ++attempt) {
+    const char* probeMsg = "CARESPEAK?";
+    udp.beginPacket(global, DISCOVERY_PORT);
+    udp.write(reinterpret_cast<const uint8_t*>(probeMsg), 10);
+    udp.endPacket();
+    udp.beginPacket(subnet, DISCOVERY_PORT);
+    udp.write(reinterpret_cast<const uint8_t*>(probeMsg), 10);
+    udp.endPacket();
+
+    const uint32_t start = millis();
+    while (millis() - start < 1200) {
+      loopHeartbeatMs = millis();
+      const int len = udp.parsePacket();
+      if (len <= 0) {
+        delay(5);
+        continue;
+      }
+      char buf[80];
+      int n = udp.read(buf, sizeof(buf) - 1);
+      if (n < 0) n = 0;
+      buf[n] = '\0';
+      if (strncmp(buf, "CARESPEAK:", 10) == 0) {
+        String host = String(buf + 10);
+        host.trim();
+        if (host.length() > 0 && host.length() < 60) {
+          snprintf(SERVER_URL, sizeof(SERVER_URL), "http://%s:3000/api/ingest", host.c_str());
+          LOG("Server: UDP found %s\n", SERVER_URL);
+          found = true;
+          break;
+        }
+      }
+    }
+  }
+  udp.stop();
+  return found;
 }
 
 // Auto-discover the CareSpeak server on the local network.
@@ -328,22 +458,40 @@ static void discoverServer() {
     LOG("Server: using override URL %s\n", SERVER_URL);
     return;
   }
-  if (strlen(SERVER_URL) > 0) return;
+
+  // A URL saved on a previous network must be validated, otherwise the board
+  // would keep posting to a dead address forever after the laptop's IP changes.
+  if (strlen(SERVER_URL) > 0) {
+    if (urlReachable(SERVER_URL)) return;
+    LOG("Server: saved URL %s unreachable, clearing\n", SERVER_URL);
+    SERVER_URL[0] = '\0';
+  }
+
+  if (WiFi.status() != WL_CONNECTED) return;
 
   LOG("Server: auto-discovering on local network...\n");
   if (loopWatchdog) esp_timer_stop(loopWatchdog);
 
+  if (udpDiscover()) {
+    saveServerUrl(SERVER_URL);
+    if (loopWatchdog) esp_timer_start_periodic(loopWatchdog, 5000000ULL);
+    return;
+  }
+
   IPAddress ip = WiFi.localIP();
   WiFiClient probe;
+  const uint8_t gw = WiFi.gatewayIP()[3];
 
-  // Try likely server IPs first (2s timeout each).
-  uint8_t candidates[] = { WiFi.gatewayIP()[3], 1, 2, 10, 50, 100, 144, 200, 254 };
-  for (uint8_t ci = 0; ci < sizeof(candidates); ++ci) {
+  // The laptop is 192.168.0.144 on "Anas", but DHCP can move it. The gateway
+  // is the laptop itself when the laptop hosts the hotspot (192.168.137.1).
+  uint8_t candidates[] = { gw, 144, 137, 100, 101, 54, 2, 10, 50, 200, 254, 1 };
+  const uint8_t candidateCount = sizeof(candidates) / sizeof(candidates[0]);
+  for (uint8_t ci = 0; ci < candidateCount; ++ci) {
     loopHeartbeatMs = millis();
     IPAddress target(ip[0], ip[1], ip[2], candidates[ci]);
     if (target == ip) continue;
     LOG("  trying %s...\n", target.toString().c_str());
-    if (probe.connect(target, 3000, 2000)) {
+    if (probe.connect(target, 3000, 900)) {
       snprintf(SERVER_URL, sizeof(SERVER_URL), "http://%s:3000/api/ingest", target.toString().c_str());
       LOG("Server: discovered at %s\n", SERVER_URL);
       saveServerUrl(SERVER_URL);
@@ -354,18 +502,18 @@ static void discoverServer() {
     probe.stop();
   }
 
-  // Full subnet scan as last resort (50ms per IP).
-  LOG("Server: scanning full subnet...\n");
-  for (uint8_t i = 1; i <= 254; ++i) {
+  // Full subnet scan as the last resort (25 ms per address).
+  LOG("Server: scanning subnet %s...\n", ip.toString().c_str());
+  for (uint16_t i = 1; i <= 254; ++i) {
     loopHeartbeatMs = millis();
-    IPAddress target(ip[0], ip[1], ip[2], i);
+    IPAddress target(ip[0], ip[1], ip[2], static_cast<uint8_t>(i));
     if (target == ip) continue;
     bool skip = false;
-    for (uint8_t ci = 0; ci < sizeof(candidates); ++ci) {
+    for (uint8_t ci = 0; ci < candidateCount; ++ci) {
       if (i == candidates[ci]) { skip = true; break; }
     }
     if (skip) continue;
-    if (probe.connect(target, 3000, 50)) {
+    if (probe.connect(target, 3000, 25)) {
       snprintf(SERVER_URL, sizeof(SERVER_URL), "http://%s:3000/api/ingest", target.toString().c_str());
       LOG("Server: discovered at %s\n", SERVER_URL);
       saveServerUrl(SERVER_URL);
@@ -375,10 +523,10 @@ static void discoverServer() {
     }
   }
 
-  LOG("Server: discovery failed. Set SERVER_URL_OVERRIDE in config.\n");
-  // Fallback to Vercel URL so data still flows.
-  strlcpy(SERVER_URL, "https://carespeak-artificial.vercel.app/api/ingest", sizeof(SERVER_URL));
-  LOG("Server: falling back to Vercel URL\n");
+  // Never fall back to the cloud: it cannot store data without Redis quota.
+  // Leaving the URL empty makes the scheduler retry discovery every 10 s, and
+  // the USB serial bridge keeps the dashboard live in the meantime.
+  LOG("Server: not found on this network; will retry in 10 s (USB bridge still live)\n");
   if (loopWatchdog) esp_timer_start_periodic(loopWatchdog, 5000000ULL);
 }
 
@@ -394,7 +542,7 @@ static void wifiScheduleRetry(uint32_t now) {
 static void wifiLoop(uint32_t now) {
   switch (wifiState) {
     case WifiState::Idle:
-      if (timeReached(now, wifiNextAttemptAt)) wifiStart(now);
+      if (!wifiManuallyDisabled && !wifiPausedForBt && timeReached(now, wifiNextAttemptAt)) wifiStart(now);
       break;
 
     case WifiState::Connecting:
@@ -405,10 +553,11 @@ static void wifiLoop(uint32_t now) {
         LOG("Wi-Fi: connected, IP %s, RSSI %d dBm\n",
             WiFi.localIP().toString().c_str(), WiFi.RSSI());
         lastVitalsPost = now - POST_INTERVAL_MS + 1000UL;
+        lastNetRecoveryAt = now;
         discoverServer();
       } else if (now - wifiStartedAt >= WIFI_CONNECT_TIMEOUT) {
         LOG("Wi-Fi: connect timeout (status %d)\n", WiFi.status());
-        WiFi.disconnect(true);
+        WiFi.disconnect(true, false);
         wifiScheduleRetry(now);
       }
       break;
@@ -417,20 +566,38 @@ static void wifiLoop(uint32_t now) {
       if (WiFi.status() != WL_CONNECTED) {
         LOG("Wi-Fi: link lost (status %d)\n", WiFi.status());
         wifiScheduleRetry(now);
+      } else if (wifiManuallyDisabled) {
+        WiFi.disconnect(true, false);
+        WiFi.mode(WIFI_OFF);
+        wifiState = WifiState::Idle;
       } else if (strlen(SERVER_URL) == 0) {
-        // Still haven't discovered the server; retry discovery.
+        // No server yet: retry discovery every 10 s.
         if (now - lastNetRecoveryAt >= 10000) {
           lastNetRecoveryAt = now;
           discoverServer();
         }
-      } else if (lastPostTryAt != 0 && (now - lastPostOkAt) >= NET_RECOVERY_MS) {
-        if (now - lastNetRecoveryAt >= NET_RECOVERY_MS) {
+      } else if (lastPostTryAt != 0 && (now - lastPostOkAt) >= REDISCOVER_AFTER_MS) {
+        // The laptop's IP may have changed. Re-probe the saved URL and
+        // rediscover instead of waiting for a Wi-Fi reconnect.
+        if (now - lastNetRecoveryAt >= REDISCOVER_AFTER_MS) {
           lastNetRecoveryAt = now;
-          LOG("Wi-Fi: no successful POST for %lu s, forcing reconnect\n",
+          LOG("Net: no POST success for %lu s, rediscovering server\n",
               static_cast<unsigned long>((now - lastPostOkAt) / 1000));
-          WiFi.disconnect(true);
-          wifiScheduleRetry(now);
+          SERVER_URL[0] = '\0';
+          discoverServer();
         }
+      }
+
+      // Last resort: if even discovery cannot produce a working POST for
+      // 90 s, cycle the Wi-Fi link and rescan all networks.
+      if (WiFi.status() == WL_CONNECTED && lastPostTryAt != 0 &&
+          (now - lastPostOkAt) >= NET_RECOVERY_MS &&
+          (now - lastWifiRecycleAt) >= NET_RECOVERY_MS) {
+        lastWifiRecycleAt = now;
+        LOG("Wi-Fi: no POST success for %lu s, forcing reconnect\n",
+            static_cast<unsigned long>((now - lastPostOkAt) / 1000));
+        WiFi.disconnect(true, false);
+        wifiScheduleRetry(now);
       }
       break;
   }
@@ -527,8 +694,9 @@ static bool sensorBegin() {
     return false;
   }
 
-  // sampleAverage=2 (50 Hz effective), red+IR mode, 100 Hz, 411 us, 4096 nA.
-  particleSensor.setup(0x1F, 2, 2, 100, 411, 4096);
+  // sampleAverage=4 (25 Hz effective), red+IR mode, 100 Hz, 411 us, 4096 nA.
+  // 25 Hz is required by the vendor HR/SpO2 algorithm (100 samples = 4 s).
+  particleSensor.setup(0x1F, 4, 2, 100, 411, 4096);
   particleSensor.setPulseAmplitudeRed(0x14);   // ~4 mA: keep IR DC in the 40-80k range
   particleSensor.setPulseAmplitudeIR(0x1A);    // ~5 mA: AC amplitude then stays inside
                                                   // the library's 20-1000 beat-detect band
@@ -600,6 +768,12 @@ static void sensorLoop(uint32_t now) {
 
   if (!fingerPresent) {
     // Keep the HR/SpO2 window for 1.5 s so a brief lift does not wipe it.
+    maximFilled = 0;
+    maximPos = 0;
+    maximHr = 0;
+    maximSpo2 = 0;
+    maximHrValid = 0;
+    maximSpo2Valid = 0;
     if (!sensorCleared && now - fingerLostAt >= 1500UL) {
       beatAvg = 0;
       rateCount = 0;
@@ -611,58 +785,51 @@ static void sensorLoop(uint32_t now) {
     return;
   }
 
-  const uint32_t beatAt = millis();
-  const bool beat = checkForBeat(static_cast<long>(ir));
-  if (beat) {
-    const uint32_t delta = beatAt - lastBeatMs;
-    lastBeatMs = beatAt;
-    LOG("  beat: delta=%lu ms inRange=%d\n", static_cast<unsigned long>(delta),
-        (delta >= 300 && delta <= 2000) ? 1 : 0);
-    if (beatAt - fingerPresentSince < 2000UL) {
-      // Ignore the first 2 s after contact while the signal settles.
-    } else if (delta >= 300 && delta <= 2000) {           // 20–300 BPM sanity band
-      const float bpm = 60000.0f / static_cast<float>(delta);
-      if (bpm >= 40.0f && bpm <= 180.0f) {
-        rates[rateSpot] = static_cast<uint8_t>(bpm + 0.5f);
-        rateSpot = (rateSpot + 1) % RATE_SIZE;
-        if (rateCount < RATE_SIZE) ++rateCount;
-        if (rateCount >= 3) {
-          uint16_t sum = 0;
-          for (uint8_t i = 0; i < rateCount; ++i) sum += rates[i];
-          beatAvg = sum / rateCount;
-        }
-      }
-    }
-  }
+  // Feed the vendor's 4-second / 25 Hz reference window.
+  maximIr[maximPos] = ir;
+  maximRed[maximPos] = red;
+  maximPos = (maximPos + 1) % 100;
+  if (maximFilled < 100) ++maximFilled;
 
-  // Peak-to-peak tracker: helps tune finger pressure.
+  // Peak-to-peak tracker: helps tune finger pressure in the serial log.
   static uint32_t irMin = 0, irMax = 0;
   static uint8_t ppCount = 0;
   static uint32_t ppLastLog = 0;
   if (ppCount == 0) { irMin = ir; irMax = ir; }
   else { if (ir < irMin) irMin = ir; if (ir > irMax) irMax = ir; }
   ppCount++;
-  if (ppCount >= 50) {
+  if (ppCount >= 25) {                       // 1 s at 25 Hz
     uint32_t pp = irMax - irMin;
     if (now - ppLastLog >= 1000UL) {
       ppLastLog = now;
-      LOG("HR: ir=%lu pp=%lu bpm=%d%s\n",
+      LOG("HR: ir=%lu pp=%lu bpm=%d spo2=%d%s\n",
           static_cast<unsigned long>(ir), static_cast<unsigned long>(pp),
-          beatAvg,
+          beatAvg, spo2Value,
           pp < 30 ? " (press HARDER)" : (pp > 1000 ? " (press LIGHTER / relax)" : ""));
     }
     ppCount = 0;
     irMin = ir; irMax = ir;
   }
 
-  spo2Add(static_cast<float>(red), static_cast<float>(ir));
-  int candidate = 0;
-  if (spo2Compute(candidate)) {
-    // Light EMA so the displayed number does not jump every sample.
-    if (spo2Value <= 0) {
-      spo2Value = candidate;
-    } else {
-      spo2Value = (spo2Value * 3 + candidate + 2) / 4;
+  // Vendor algorithm (Maxim REFDES117): robust HR + SpO2 from a 4 s window.
+  if (maximFilled >= 100 && now - lastMaximCalc >= 1000UL) {
+    lastMaximCalc = now;
+    for (uint16_t i = 0; i < 100; ++i) {
+      const uint16_t idx = (maximPos + i) % 100;
+      maximIrCopy[i] = maximIr[idx];
+      maximRedCopy[i] = maximRed[idx];
+    }
+    maxim_heart_rate_and_oxygen_saturation(
+        maximIrCopy, 100, maximRedCopy,
+        &maximSpo2, &maximSpo2Valid, &maximHr, &maximHrValid);
+    LOG("MAXIM: hr=%ld (%d) spo2=%ld (%d)\n",
+        static_cast<long>(maximHr), maximHrValid,
+        static_cast<long>(maximSpo2), maximSpo2Valid);
+    if (maximHrValid && maximHr >= 40 && maximHr <= 180) {
+      beatAvg = static_cast<int>(maximHr);
+    }
+    if (maximSpo2Valid && maximSpo2 >= 70 && maximSpo2 <= 100) {
+      spo2Value = static_cast<int>(maximSpo2);
     }
   }
 }
@@ -738,7 +905,11 @@ static void sosLoop(uint32_t now) {
 static int httpPost(const String& body, String* response = nullptr) {
   if (WiFi.status() != WL_CONNECTED) return -1;
   if (strlen(SERVER_URL) == 0) {
-    LOG("HTTP: server URL not discovered yet\n");
+    static uint32_t lastNoUrlLog = 0;
+    if (millis() - lastNoUrlLog >= 30000UL) {
+      lastNoUrlLog = millis();
+      LOG("HTTP: no server URL yet (USB bridge still receives data)\n");
+    }
     return -1;
   }
 
@@ -805,13 +976,22 @@ static int postVitals() {
 #endif
 
   doc["sosActive"] = sosLatched;
-  doc["rssi"]      = WiFi.RSSI();
+  // Only report Wi-Fi RSSI when the radio is actually associated. Bluetooth-only
+  // demo mode reports 0, which the dashboard would otherwise show as "Fair".
+  if (WiFi.status() == WL_CONNECTED) doc["rssi"] = WiFi.RSSI();
 
   String body;
   body.reserve(224);
   serializeJson(doc, body);
   LOG("TX vitals: %s (heap=%lu)\n", body.c_str(),
       static_cast<unsigned long>(esp_get_free_heap_size()));
+#if ENABLE_BT_SERIAL
+  // Mirror the exact same line over Bluetooth Classic. The laptop bridge sees
+  // it as a normal serial line on the paired virtual COM port.
+  if (SerialBT.hasClient()) {
+    SerialBT.printf("TX vitals: %s\n", body.c_str());
+  }
+#endif
 
   String response;
   const int code = httpPost(body, &response);
@@ -831,6 +1011,11 @@ static int postEvent(const char* type) {
   body.reserve(128);
   serializeJson(doc, body);
   LOG("TX %s: %s\n", type, body.c_str());
+#if ENABLE_BT_SERIAL
+  if (SerialBT.hasClient()) {
+    SerialBT.printf("TX %s: %s\n", type, body.c_str());
+  }
+#endif
 
   String response;
   const int code = httpPost(body, &response);
@@ -860,7 +1045,9 @@ static int readBatteryPercent() {
 static void vitalsLoop(uint32_t now) {
   if (now - lastVitalsPost < POST_INTERVAL_MS) return;
   lastVitalsPost = now;
-  if (WiFi.status() == WL_CONNECTED) postVitals();
+  // Always emit "TX vitals: {...}" on USB serial. Even with Wi-Fi completely
+  // disabled, tools/serial-bridge.ps1 forwards this JSON to /api/ingest.
+  postVitals();
 }
 
 // Last-resort recovery. The Wi-Fi state machine already forces a reconnect
@@ -872,6 +1059,35 @@ static void networkHealthLoop(uint32_t now) {
     hardRestart("no successful POST for 3 min");
   }
 }
+
+#if ENABLE_BT_SERIAL
+// When the laptop opens the Bluetooth SPP port, drop Wi-Fi. This avoids
+// Wi-Fi/BT radio contention, saves battery, and frees ~35 KB of heap. Wi-Fi
+// comes back automatically a few seconds after the Bluetooth client leaves.
+static bool btClientWasConnected = false;
+
+static void btCoexistLoop(uint32_t now) {
+  const bool client = SerialBT.hasClient();
+  if (client && !btClientWasConnected) {
+    btClientWasConnected = true;
+    if (!wifiManuallyDisabled && !wifiPausedForBt) {
+      wifiPausedForBt = true;
+      LOG("BT: client connected -> Wi-Fi paused (direct Bluetooth mode)\n");
+      WiFi.disconnect(true, false);
+      WiFi.mode(WIFI_OFF);
+      wifiState = WifiState::Idle;
+    }
+  } else if (!client && btClientWasConnected) {
+    btClientWasConnected = false;
+    if (wifiPausedForBt) {
+      wifiPausedForBt = false;
+      wifiState = WifiState::Idle;
+      wifiNextAttemptAt = now + 3000;
+      LOG("BT: client disconnected -> Wi-Fi resumes\n");
+    }
+  }
+}
+#endif
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 11. SETUP / LOOP
@@ -888,6 +1104,13 @@ void setup() {
   pinMode(PIN_SOS_BUTTON, INPUT_PULLUP);
   pinMode(PIN_BUZZER, OUTPUT);
   digitalWrite(PIN_BUZZER, LOW);
+
+#if ENABLE_BT_SERIAL
+  // Bluetooth Classic SPP. Pair "CareSpeak-ESP32" once in Windows; it then
+  // appears as a virtual COM port that the serial bridge can read.
+  SerialBT.begin("CareSpeak-ESP32");
+  LOG("Bluetooth: SPP started as \"CareSpeak-ESP32\"\n");
+#endif
 
   configWarnings();
   loadServerUrl();
@@ -917,9 +1140,25 @@ void loop() {
         LOG("Server: URL set to %s (saved)\n", SERVER_URL);
       }
     } else if (cmd == "STATUS") {
-      LOG("Status: WiFi=%d IP=%s Server=%s Heap=%lu\n",
-          WiFi.status(), WiFi.localIP().toString().c_str(), SERVER_URL,
+      LOG("Status: WiFi=%d IP=%s RSSI=%d Server=%s LastOK=%lu Heap=%lu\n",
+          WiFi.status(), WiFi.localIP().toString().c_str(), WiFi.RSSI(), SERVER_URL,
+          static_cast<unsigned long>(lastPostOkAt),
           static_cast<unsigned long>(esp_get_free_heap_size()));
+    } else if (cmd == "WIFIOFF") {
+      wifiManuallyDisabled = true;
+      WiFi.disconnect(true, false);
+      WiFi.mode(WIFI_OFF);
+      wifiState = WifiState::Idle;
+      LOG("Wi-Fi: OFF (USB bridge only). Send WIFION to re-enable.\n");
+    } else if (cmd == "WIFION") {
+      wifiManuallyDisabled = false;
+      wifiState = WifiState::Idle;
+      wifiNextAttemptAt = millis();
+      LOG("Wi-Fi: ON, connecting...\n");
+    } else if (cmd == "CLEARURL") {
+      SERVER_URL[0] = '\0';
+      saveServerUrl("");
+      LOG("Server: URL cleared; will rediscover\n");
     } else if (cmd == "REBOOT") {
       ESP.restart();
     }
@@ -930,6 +1169,9 @@ void loop() {
 
   // Network work runs FIRST: even if the sensor I2C bus locks up later in
   // this iteration, the watchdog restarts the board within 45 s.
+#if ENABLE_BT_SERIAL
+  btCoexistLoop(now);
+#endif
   wifiLoop(now);
   vitalsLoop(now);
   networkHealthLoop(now);

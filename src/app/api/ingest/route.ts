@@ -62,6 +62,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     sosActive?: boolean;
     batteryPct?: number;
     rssi?: number;
+    finger?: boolean;
   } | null;
 
   if (!body || typeof body.session !== "string" || !/^[A-Z0-9_-]{3,32}$/.test(body.session.toUpperCase())) {
@@ -98,9 +99,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   if (body.type === "vitals") {
     try {
+      const sanitized = sanitizeVitals(body);
+      // A lifted finger must clear the last reading, even if old firmware
+      // re-sends the previous HR/SpO2 in the same packet.
+      if (body.finger === false) {
+        delete sanitized.heartRate;
+        delete sanitized.spo2;
+      }
       await store.setVitals(body.session.toUpperCase(), {
         deviceId,
-        ...sanitizeVitals(body),
+        ...sanitized,
         receivedAt: now,
       });
     } catch (e) {
