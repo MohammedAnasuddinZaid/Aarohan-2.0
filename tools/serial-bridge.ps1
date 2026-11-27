@@ -84,6 +84,7 @@ function Post-Vitals([string]$json) {
 Log "=== CareSpeak bridge starting (USB or Bluetooth, no Wi-Fi needed) ==="
 
 while ($true) {
+    try {
     $candidates = @(Get-PortCandidates)
     if ($candidates.Count -eq 0) {
         Log "No ESP32 serial port found; waiting..."
@@ -152,4 +153,8 @@ while ($true) {
     }
 
     Start-Sleep -Seconds 2
+    } catch {
+        Log ("Bridge loop error: {0}" -f $_.Exception.Message)
+        Start-Sleep -Seconds 5
+    }
 }

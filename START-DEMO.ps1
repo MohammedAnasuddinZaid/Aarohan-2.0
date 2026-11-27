@@ -22,41 +22,39 @@ function Test-Port([int]$port) {
 function Test-BridgeRunning {
     try {
         foreach ($p in (Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction SilentlyContinue)) {
-            if ($p.CommandLine -and $p.CommandLine -like "*serial-bridge.ps1*") { return $true }
+            if ($p.CommandLine -and $p.CommandLine -like "*serial-bridge.ps1*" -and $p.CommandLine -notlike "*Get-CimInstance*") { return $true }
         }
         return $false
     } catch { return $false }
 }
 
-function Get-BtComPort {
+function Get-BtPorts {
+    $list = @()
     foreach ($d in (Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue)) {
         if ($d.Name -notmatch 'Standard Serial over Bluetooth') { continue }
         $m = [regex]::Match($d.Name, '\((COM\d+)\)')
         if (-not $m.Success) { continue }
-        if ($d.PNPDeviceID -and $d.PNPDeviceID -match $btMac) { return $m.Groups[1].Value }
+        $list += [pscustomobject]@{ Port = $m.Groups[1].Value; PNP = $d.PNPDeviceID; MacMatch = ($d.PNPDeviceID -match $btMac) }
     }
-    return $null
+    # Prefer the port whose PNPDeviceID contains the ESP32 MAC.
+    $preferred = $list | Where-Object { $_.MacMatch } | Select-Object -First 1
+    $rest = $list | Where-Object { -not $_.MacMatch }
+    if ($preferred) { $ordered = @($preferred) + $rest } else { $ordered = $rest }
+    return $ordered
 }
 
-# 1. Bluetooth auto-connect
-$bridgeAlready = Test-BridgeRunning
-if ($bridgeAlready) {
-    Write-Host "[demo] Bridge already running - skipping Bluetooth pre-connect (it owns the port)."
-} else {
-    $btPort = Get-BtComPort
-    if (-not $btPort) {
-        Write-Host "[demo] ESP32 Bluetooth port not visible yet - waiting up to 20s..."
-        for ($i = 0; $i -lt 20; $i++) {
-            Start-Sleep -Seconds 1
-            $btPort = Get-BtComPort
-            if ($btPort) { break }
-        }
+function Try-BtConnect {
+    # Try each candidate port; return the one that yields live data.
+    $candidates = Get-BtPorts
+    if ($candidates.Count -eq 0) {
+        Write-Host "[demo] No Bluetooth serial ports found at all."
+        return $null
     }
-    if ($btPort) {
-        Write-Host "[demo] Found ESP32 Bluetooth port $btPort - connecting..."
+    foreach ($c in $candidates) {
+        Write-Host "[demo] Trying $($c.Port) ..."
         $sp = $null
         try {
-            $sp = New-Object System.IO.Ports.SerialPort($btPort, 115200, 'None', 8, 'One')
+            $sp = New-Object System.IO.Ports.SerialPort($c.Port, 115200, 'None', 8, 'One')
             $sp.ReadTimeout = 1000
             $sp.DtrEnable = $false
             $sp.RtsEnable = $false
@@ -70,19 +68,38 @@ if ($bridgeAlready) {
                 } catch { }
             }
             if ($gotData) {
-                Write-Host "[demo] Bluetooth connected to ESP32 - live data flowing."
+                Write-Host "[demo] Connected on $($c.Port) - live data flowing."
+                return $c.Port
             } else {
-                Write-Host "[demo] Bluetooth port opened; ESP32 may still be waking."
+                Write-Host "[demo] $($c.Port) opened but no data."
             }
         } catch {
-            Write-Host "[demo] Could not open $btPort : $($_.Exception.Message)"
-            Write-Host "[demo] Make sure Bluetooth is ON in Windows Settings and the ESP32 is powered."
+            Write-Host "[demo] $($c.Port) could not be opened: $($_.Exception.Message)"
         } finally {
             if ($sp -and $sp.IsOpen) { try { $sp.Close() } catch { } }
         }
+    }
+    return $null
+}
+
+# 1. Bluetooth auto-connect (skip if bridge already owns a port)
+$bridgeAlready = Test-BridgeRunning
+if ($bridgeAlready) {
+    Write-Host "[demo] Bridge already running - skipping Bluetooth pre-connect."
+} else {
+    Write-Host "[demo] Auto-connecting to CareSpeak-ESP32 over Bluetooth..."
+    $connectedPort = $null
+    # Give Windows a moment to expose the port after radio on.
+    for ($attempt = 1; $attempt -le 3 -and -not $connectedPort; $attempt++) {
+        if ($attempt -gt 1) { Start-Sleep -Seconds 3 }
+        $connectedPort = Try-BtConnect
+    }
+    if ($connectedPort) {
+        Write-Host "[demo] Bluetooth connected on $connectedPort."
     } else {
-        Write-Host "[demo] ESP32 Bluetooth port not found."
-        Write-Host "[demo] Turn Bluetooth ON in Windows Settings, pair 'CareSpeak-ESP32', then re-run."
+        Write-Host "[demo] Could not auto-connect over Bluetooth."
+        Write-Host "[demo] Checklist: Bluetooth ON in Windows Settings; 'CareSpeak-ESP32' paired; ESP32 powered on battery."
+        Write-Host "[demo] The bridge will keep retrying on its own."
     }
 }
 
@@ -104,11 +121,12 @@ if (-not (Test-Port 3000)) {
     Write-Host "[demo] Website already running on port 3000."
 }
 
-# 3. Bridge
+# 3. Bridge (quote the path because it contains spaces)
 if (-not (Test-BridgeRunning)) {
     Write-Host "[demo] Starting serial bridge (USB or Bluetooth) ..."
-    Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$bridge -WindowStyle Normal
-    Start-Sleep -Seconds 3
+    $bridgeQuoted = '"' + $bridge + '"'
+    Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File $bridgeQuoted" -WindowStyle Normal
+    Start-Sleep -Seconds 4
 } else {
     Write-Host "[demo] Bridge already running."
 }
@@ -116,7 +134,7 @@ if (-not (Test-BridgeRunning)) {
 # 4. Confirm data is actually flowing into the website
 Write-Host "[demo] Verifying readings reach the website..."
 $flowing = $false
-for ($i = 0; $i -lt 15; $i++) {
+for ($i = 0; $i -lt 20; $i++) {
     Start-Sleep -Seconds 1
     try {
         $v = Invoke-RestMethod -Uri "http://localhost:3000/api/sync?session=$session&since=0" -TimeoutSec 5
