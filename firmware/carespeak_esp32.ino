@@ -206,61 +206,7 @@ static void startLoopWatchdog() {
 //  5. WI-FI — non-blocking state machine
 // ═════════════════════════════════════════════════════════════════════════════
 static void discoverServer();  // forward declaration
-
-// Auto-discover the CareSpeak server on the local network.
-static void discoverServer() {
-  if (strlen(SERVER_URL_OVERRIDE) > 0) {
-    strlcpy(SERVER_URL, SERVER_URL_OVERRIDE, sizeof(SERVER_URL));
-    LOG("Server: using override URL %s\n", SERVER_URL);
-    return;
-  }
-  if (strlen(SERVER_URL) > 0) return;
-
-  LOG("Server: auto-discovering on local network...\n");
-  if (loopWatchdog) esp_timer_stop(loopWatchdog);
-
-  IPAddress ip = WiFi.localIP();
-
-  // Try likely server IPs first.
-  uint8_t candidates[] = { 1, 2, 10, 50, 100, 144, 200, 254, WiFi.gatewayIP()[3] };
-  WiFiClient probe;
-
-  for (uint8_t ci = 0; ci < sizeof(candidates); ++ci) {
-    loopHeartbeatMs = millis();
-    IPAddress target(ip[0], ip[1], ip[2], candidates[ci]);
-    if (target == ip) continue;
-    if (probe.connect(target, 3000, 300)) {
-      snprintf(SERVER_URL, sizeof(SERVER_URL), "http://%s:3000/api/ingest", target.toString().c_str());
-      LOG("Server: discovered at %s\n", SERVER_URL);
-      probe.stop();
-      if (loopWatchdog) esp_timer_start_periodic(loopWatchdog, 5000000ULL);
-      return;
-    }
-  }
-
-  // Full subnet scan as last resort.
-  LOG("Server: scanning full subnet...\n");
-  for (uint8_t i = 1; i <= 254; ++i) {
-    loopHeartbeatMs = millis();
-    IPAddress target(ip[0], ip[1], ip[2], i);
-    if (target == ip) continue;
-    bool skip = false;
-    for (uint8_t ci = 0; ci < sizeof(candidates); ++ci) {
-      if (i == candidates[ci]) { skip = true; break; }
-    }
-    if (skip) continue;
-    if (probe.connect(target, 3000, 100)) {
-      snprintf(SERVER_URL, sizeof(SERVER_URL), "http://%s:3000/api/ingest", target.toString().c_str());
-      LOG("Server: discovered at %s\n", SERVER_URL);
-      probe.stop();
-      if (loopWatchdog) esp_timer_start_periodic(loopWatchdog, 5000000ULL);
-      return;
-    }
-  }
-
-  LOG("Server: discovery failed. Set SERVER_URL_OVERRIDE in config.\n");
-  if (loopWatchdog) esp_timer_start_periodic(loopWatchdog, 5000000ULL);
-}
+static void wifiStart(uint32_t now);  // forward declaration
 
 static void wifiStart(uint32_t now) {
   LOG("Wi-Fi: trying known networks...\n");
@@ -274,7 +220,6 @@ static void wifiStart(uint32_t now) {
   WiFi.setSleep(false);
 #endif
 
-  // Try each known credential directly (no scan needed).
   bool connected = false;
   for (uint8_t c = 0; c < WIFI_CRED_COUNT && !connected; ++c) {
     LOG("Wi-Fi: trying \"%s\"...\n", WIFI_CREDS[c].ssid);
@@ -295,7 +240,6 @@ static void wifiStart(uint32_t now) {
     }
   }
 
-  // If no known network matched, scan and try to match by name or open networks.
   if (!connected) {
     LOG("Wi-Fi: scanning for networks...\n");
     int found = WiFi.scanNetworks();
@@ -345,6 +289,65 @@ static void wifiStart(uint32_t now) {
   wifiBackoffStep = 0;
   lastVitalsPost = now - POST_INTERVAL_MS + 1000UL;
   discoverServer();
+}
+
+// Auto-discover the CareSpeak server on the local network.
+static void discoverServer() {
+  if (strlen(SERVER_URL_OVERRIDE) > 0) {
+    strlcpy(SERVER_URL, SERVER_URL_OVERRIDE, sizeof(SERVER_URL));
+    LOG("Server: using override URL %s\n", SERVER_URL);
+    return;
+  }
+  if (strlen(SERVER_URL) > 0) return;
+
+  LOG("Server: auto-discovering on local network...\n");
+  if (loopWatchdog) esp_timer_stop(loopWatchdog);
+
+  IPAddress ip = WiFi.localIP();
+  WiFiClient probe;
+
+  // Try likely server IPs first (2s timeout each).
+  uint8_t candidates[] = { WiFi.gatewayIP()[3], 1, 2, 10, 50, 100, 144, 200, 254 };
+  for (uint8_t ci = 0; ci < sizeof(candidates); ++ci) {
+    loopHeartbeatMs = millis();
+    IPAddress target(ip[0], ip[1], ip[2], candidates[ci]);
+    if (target == ip) continue;
+    LOG("  trying %s...\n", target.toString().c_str());
+    if (probe.connect(target, 3000, 2000)) {
+      snprintf(SERVER_URL, sizeof(SERVER_URL), "http://%s:3000/api/ingest", target.toString().c_str());
+      LOG("Server: discovered at %s\n", SERVER_URL);
+      probe.stop();
+      if (loopWatchdog) esp_timer_start_periodic(loopWatchdog, 5000000ULL);
+      return;
+    }
+    probe.stop();
+  }
+
+  // Full subnet scan as last resort (50ms per IP).
+  LOG("Server: scanning full subnet...\n");
+  for (uint8_t i = 1; i <= 254; ++i) {
+    loopHeartbeatMs = millis();
+    IPAddress target(ip[0], ip[1], ip[2], i);
+    if (target == ip) continue;
+    bool skip = false;
+    for (uint8_t ci = 0; ci < sizeof(candidates); ++ci) {
+      if (i == candidates[ci]) { skip = true; break; }
+    }
+    if (skip) continue;
+    if (probe.connect(target, 3000, 50)) {
+      snprintf(SERVER_URL, sizeof(SERVER_URL), "http://%s:3000/api/ingest", target.toString().c_str());
+      LOG("Server: discovered at %s\n", SERVER_URL);
+      probe.stop();
+      if (loopWatchdog) esp_timer_start_periodic(loopWatchdog, 5000000ULL);
+      return;
+    }
+  }
+
+  LOG("Server: discovery failed. Set SERVER_URL_OVERRIDE in config.\n");
+  // Fallback to Vercel URL so data still flows.
+  strlcpy(SERVER_URL, "https://carespeak-artificial.vercel.app/api/ingest", sizeof(SERVER_URL));
+  LOG("Server: falling back to Vercel URL\n");
+  if (loopWatchdog) esp_timer_start_periodic(loopWatchdog, 5000000ULL);
 }
 
 static void wifiScheduleRetry(uint32_t now) {
@@ -868,6 +871,26 @@ void setup() {
 }
 
 void loop() {
+  // Serial command handler: type "SETURL http://x.x.x.x:3000/api/ingest"
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd.startsWith("SETURL ")) {
+      String url = cmd.substring(7);
+      url.trim();
+      if (url.length() > 0 && url.length() < sizeof(SERVER_URL)) {
+        strlcpy(SERVER_URL, url.c_str(), sizeof(SERVER_URL));
+        LOG("Server: URL set to %s\n", SERVER_URL);
+      }
+    } else if (cmd == "STATUS") {
+      LOG("Status: WiFi=%d IP=%s Server=%s Heap=%lu\n",
+          WiFi.status(), WiFi.localIP().toString().c_str(), SERVER_URL,
+          static_cast<unsigned long>(ESP.getFreeHeap()));
+    } else if (cmd == "REBOOT") {
+      ESP.restart();
+    }
+  }
+
   const uint32_t now = millis();
   loopHeartbeatMs = now;
 
