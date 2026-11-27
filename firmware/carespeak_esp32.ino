@@ -35,6 +35,7 @@
 #include <HTTPClient.h>
 #include <Wire.h>
 #include <ArduinoJson.h>
+#include <EEPROM.h>
 #include <esp_timer.h>
 #include <esp_system.h>
 #include "MAX30105.h"
@@ -74,8 +75,9 @@ constexpr uint8_t PIN_I2C_SDA    = 21;
 constexpr uint8_t PIN_I2C_SCL    = 22;
 constexpr uint8_t PIN_BATTERY    = 34;    // only used when ENABLE_BATTERY == 1
 
-// Feature switches (preprocessor flags: 0 = off, 1 = on)
-#define ENABLE_BATTERY   0   // set 1 once a divider is wired to GPIO34
+// EEPROM settings
+#define EEPROM_SIZE 256
+#define EEPROM_URL_ADDR 0
 #define ENABLE_WIFI_SCAN 0   // set 1 only for one-off Wi-Fi debugging
 #define DEBUG_SENSOR     1   // 1 = print raw red/IR once a second
 #define ENABLE_SOS_BUTTON 0  // set 1 when a push button is wired to GPIO27->GND
@@ -170,9 +172,37 @@ static void configWarnings() {
 //  Runs from the esp_timer task, so it still fires if the main loop is stuck
 //  inside a blocking I2C/Wi-Fi call. A stuck loop is restarted after 45 s.
 // ═════════════════════════════════════════════════════════════════════════════
+// Load saved server URL from EEPROM.
+static void loadServerUrl() {
+  EEPROM.begin(EEPROM_SIZE);
+  char buf[128];
+  for (int i = 0; i < 127; i++) {
+    buf[i] = EEPROM.read(EEPROM_URL_ADDR + i);
+    if (buf[i] == '\0') break;
+  }
+  buf[127] = '\0';
+  if (strlen(buf) > 10 && strstr(buf, "http") == buf) {
+    strlcpy(SERVER_URL, buf, sizeof(SERVER_URL));
+    LOG("Server: loaded from EEPROM: %s\n", SERVER_URL);
+  }
+  EEPROM.end();
+}
+
+// Save server URL to EEPROM.
+static void saveServerUrl(const char* url) {
+  EEPROM.begin(EEPROM_SIZE);
+  for (int i = 0; i < 127; i++) {
+    EEPROM.write(EEPROM_URL_ADDR + i, url[i]);
+    if (url[i] == '\0') break;
+  }
+  EEPROM.write(EEPROM_URL_ADDR + 127, '\0');
+  EEPROM.commit();
+  EEPROM.end();
+  LOG("Server: saved to EEPROM\n");
+}
+
 static void hardRestart(const char* reason) {
   LOG("RESTART: %s\n", reason);
-  Serial.flush();
   delay(200);
   ESP.restart();
 }
@@ -180,7 +210,7 @@ static void hardRestart(const char* reason) {
 static void loopWatchdogCb(void*) {
   const uint32_t now = millis();
   if (static_cast<uint32_t>(now - loopHeartbeatMs) > LOOP_STALL_MS) {
-    esp_restart();
+    ESP.restart();
   }
 }
 
@@ -316,6 +346,7 @@ static void discoverServer() {
     if (probe.connect(target, 3000, 2000)) {
       snprintf(SERVER_URL, sizeof(SERVER_URL), "http://%s:3000/api/ingest", target.toString().c_str());
       LOG("Server: discovered at %s\n", SERVER_URL);
+      saveServerUrl(SERVER_URL);
       probe.stop();
       if (loopWatchdog) esp_timer_start_periodic(loopWatchdog, 5000000ULL);
       return;
@@ -337,6 +368,7 @@ static void discoverServer() {
     if (probe.connect(target, 3000, 50)) {
       snprintf(SERVER_URL, sizeof(SERVER_URL), "http://%s:3000/api/ingest", target.toString().c_str());
       LOG("Server: discovered at %s\n", SERVER_URL);
+      saveServerUrl(SERVER_URL);
       probe.stop();
       if (loopWatchdog) esp_timer_start_periodic(loopWatchdog, 5000000ULL);
       return;
@@ -779,7 +811,7 @@ static int postVitals() {
   body.reserve(224);
   serializeJson(doc, body);
   LOG("TX vitals: %s (heap=%lu)\n", body.c_str(),
-      static_cast<unsigned long>(ESP.getFreeHeap()));
+      static_cast<unsigned long>(esp_get_free_heap_size()));
 
   String response;
   const int code = httpPost(body, &response);
@@ -858,7 +890,8 @@ void setup() {
   digitalWrite(PIN_BUZZER, LOW);
 
   configWarnings();
-  LOG("Server: auto-discover (override: %s)\n", strlen(SERVER_URL_OVERRIDE) > 0 ? SERVER_URL_OVERRIDE : "(none)");
+  loadServerUrl();
+  LOG("Server: %s\n", strlen(SERVER_URL) > 0 ? SERVER_URL : "(auto-discover)");
 
   lastSensorAttempt = millis();
   sensorReady       = sensorBegin();
@@ -880,12 +913,13 @@ void loop() {
       url.trim();
       if (url.length() > 0 && url.length() < sizeof(SERVER_URL)) {
         strlcpy(SERVER_URL, url.c_str(), sizeof(SERVER_URL));
-        LOG("Server: URL set to %s\n", SERVER_URL);
+        saveServerUrl(SERVER_URL);
+        LOG("Server: URL set to %s (saved)\n", SERVER_URL);
       }
     } else if (cmd == "STATUS") {
       LOG("Status: WiFi=%d IP=%s Server=%s Heap=%lu\n",
           WiFi.status(), WiFi.localIP().toString().c_str(), SERVER_URL,
-          static_cast<unsigned long>(ESP.getFreeHeap()));
+          static_cast<unsigned long>(esp_get_free_heap_size()));
     } else if (cmd == "REBOOT") {
       ESP.restart();
     }
